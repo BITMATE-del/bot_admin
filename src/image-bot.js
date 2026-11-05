@@ -4,6 +4,7 @@ import { createWorker } from 'tesseract.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const sessions = new Map();
+const pending = new Map();
 const MAX_IMAGE = 12 * 1024 * 1024;
 const MAX_SIDE = 5000;
 const ttl = 30 * 60 * 1000;
@@ -69,7 +70,8 @@ function parseTarget(value){
 function pointToOriginal(x,y,angle,ow,oh,rw,rh){
   const rad=angle*Math.PI/180,c=Math.cos(rad),s=Math.sin(rad);
   const dx=x-rw/2,dy=y-rh/2;
-  return {x:c*dx-s*dy+ow/2,y:s*dx+c*dy+oh/2};
+  // Inverse of the clockwise OCR canvas rotation, not a second forward rotation.
+  return {x:c*dx+s*dy+ow/2,y:-s*dx+c*dy+oh/2};
 }
 async function locate(worker, baseBuffer, scale, width,height, target){
   const variants=[0,-12,12,-25,25,-40,40];
@@ -155,7 +157,20 @@ async function replaceText(input,changes){
   }finally{await worker.terminate();}
   const mark='<svg xmlns="http://www.w3.org/2000/svg" width="85" height="20"><rect width="85" height="20" rx="3" fill="#071321" fill-opacity=".85"/><text x="42" y="14" fill="#b8c8d9" font-family="Noto Sans CJK KR,sans-serif" font-size="11" text-anchor="middle">편집 이미지</text></svg>';
   overlays.push({input:Buffer.from(mark),left:Math.max(0,width-90),top:Math.max(0,height-24)});
-  return await sharp(upright).ensureAlpha().composite(overlays).png().toBuffer();
+  const output=await sharp(upright).ensureAlpha().composite(overlays).png().toBuffer();
+  const marker=regions.map((r,i)=>'<rect x="'+Math.max(0,r.left)+'" y="'+Math.max(0,r.top)+'" width="'+Math.max(1,r.right-r.left)+'" height="'+Math.max(1,r.bottom-r.top)+'" fill="none" stroke="#fa3b32" stroke-width="3"/><text x="'+Math.max(0,r.left)+'" y="'+Math.max(16,r.top-5)+'" fill="#ffffff" stroke="#000000" stroke-width="3" paint-order="stroke" font-size="16" font-family="sans-serif">수정위치 '+(i+1)+'</text>').join('');
+  const previewSvg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'">'+marker+'</svg>';
+  const preview=await sharp(upright).composite([{input:Buffer.from(previewSvg),left:0,top:0}]).png().toBuffer();
+  return {output,preview};
+}
+async function sendPreview(chatId,buf,id){
+  const form=new FormData();
+  form.append('chat_id',String(chatId));
+  form.append('caption','빨간 사각형이 수정하려는 위치야. 정확할 때만 [위치 확인 · 수정]을 눌러줘. 다른 위치면 취소하고 해당 부분을 확대해서 올려줘.');
+  form.append('reply_markup',JSON.stringify({inline_keyboard:[[{text:'✅ 위치 확인 · 수정',callback_data:'im:ok:'+id},{text:'❌ 취소',callback_data:'im:no:'+id}]]}));
+  form.append('photo',new Blob([buf],{type:'image/png'}),'preview.png');
+  const resp=await fetch('https://api.telegram.org/bot'+token+'/sendPhoto',{method:'POST',body:form,signal:AbortSignal.timeout(30000)});
+  const json=await resp.json();if(!json.ok)throw new Error(json.description||'미리보기 전송 실패');
 }
 async function sendImage(chatId,buf){
   const form=new FormData();
@@ -176,6 +191,19 @@ async function download(fileId){
   return Buffer.from(arr);
 }
 async function handle(update){
+  const cb=update.callback_query;
+  if(cb?.data?.startsWith('im:')){
+    const parts=cb.data.split(':');
+    const key=String(cb.from.id);
+    const job=pending.get(key);
+    if(!job||job.id!==parts[2]||Date.now()-job.created>ttl){await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'이 요청은 만료됐어. 다시 요청해 줘.',show_alert:true});return;}
+    if(parts[1]==='no'){pending.delete(key);await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'취소했어. 원본은 수정하지 않았어.'});await send(job.chatId,'수정을 취소했어. 수정 위치가 정확하지 않다면 해당 글자 부분을 확대해서 새 이미지로 올려줘.');return;}
+    if(parts[1]!=='ok')return;
+    pending.delete(key);
+    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'확인했어. 수정 이미지를 전송할게.'});
+    await sendImage(job.chatId,job.output);
+    return;
+  }
   const msg=update.message;
   if(!msg||msg.chat?.type!=='private')return;
   const chatId=msg.chat.id;
@@ -188,6 +216,7 @@ async function handle(update){
     const buf=await download(item.file_id);
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now()});
+    pending.delete(String(msg.from.id));
     await send(chatId,'이미지를 받았어. 바꿀 문구를 보내줘.\n예: 36.05 > 921.42\n또는: 36.05를 921.42로 바꿔줘\n비스듬한 문구도 인식하며, 중복될 때는 첫번째에 있는 30 > 33처럼 입력해 줘.');
     return;
   }
@@ -198,8 +227,10 @@ async function handle(update){
   if(!changes){await send(chatId,'수정할 내용을 이해하지 못했어. 아래 중 편한 방식으로 보내줘.\n\n30 > 33\n30을 33으로 바꿔줘\n첫번째에 있는 30을 33으로 바꿔줘\n\n이미지는 다시 보내지 않아도 돼.');return;}
   if(changes.length>8)throw new Error('한 번에 8개까지만 수정할 수 있어요.');
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
-  const output=await replaceText(saved.buf,changes);
-  await sendImage(chatId,output);
+  const {output,preview}=await replaceText(saved.buf,changes);
+  const id=crypto.randomBytes(8).toString('hex');
+  pending.set(String(msg.from.id),{id,chatId,output,created:Date.now()});
+  await sendPreview(chatId,preview,id);
 }
 export function mountImageBot(app,base){
   if(!token){console.log('Image bot disabled (IMAGE_BOT_TOKEN absent)');return async()=>{};}
@@ -220,11 +251,11 @@ export function mountImageBot(app,base){
       if(chatId)try{await send(chatId,'수정 실패: '+String(e.message).slice(0,200));}catch{}
     });
   });
-  const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);},60000);
+  const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);},60000);
   sweep.unref();
   return async()=>{
     const me=await tg('getMe');
-    await tg('setWebhook',{url:base+'/telegram/image-webhook',secret_token:secret,allowed_updates:['message'],drop_pending_updates:false});
+    await tg('setWebhook',{url:base+'/telegram/image-webhook',secret_token:secret,allowed_updates:['message','callback_query'],drop_pending_updates:false});
     console.log('Image editor bot started @'+me.username);
   };
 }
