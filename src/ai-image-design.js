@@ -142,8 +142,11 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
     (outputR2+outputG2+outputB2)/(pixelCount*3)-
     (outputR*outputR+outputG*outputG+outputB*outputB)/(pixelCount*pixelCount*3)
   );
-  if(outputDark/pixelCount>.91 && sourceDark/pixelCount<.55 && variance<180){
-    throw new Error('AI가 수정 내용 대신 검은 영역을 생성해 결과를 폐기했어. 원본은 유지됐어.');
+  // Solid dark output does not contain usable replacement detail.
+  // Reject it regardless of the source brightness; otherwise dark-themed
+  // source images can incorrectly pass the old sourceDark threshold.
+  if(outputDark/pixelCount>.82 && variance<350){
+    throw new Error('AI 결과가 검은 단색 영역으로 출력되어 전송을 중단했어. 원본을 유지하고 다시 시도해 줘.');
   }
   // Avoid reporting a visually unchanged region as a successful edit.
   const selectedOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
