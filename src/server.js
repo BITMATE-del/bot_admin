@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mtprotoConfigured, resolveTelegramUsername, fetchGroupParticipants } from './mtproto.js';
+import { mountImageBot } from './image-bot.js';
 
 const required = ['BOT_TOKEN','DATABASE_URL','PUBLIC_URL','WEBHOOK_SECRET','SESSION_SECRET','ADMIN_SECOND_PASSWORD','OPERATOR_TELEGRAM_IDS'];
 for (const key of required) if (!process.env[key]) throw new Error('Missing environment variable: '+key);
@@ -294,10 +295,12 @@ app.get('/api/groups/:id/audit',auth,async(req,res,next)=>{try{const id=safeId(r
 app.post('/api/groups/:id/pin',auth,(req,res,next)=>{const mid=Number(req.body.message_id);if(!Number.isSafeInteger(mid)||mid<=0)return res.sendStatus(400);execute(req,res,next,'pin_message',{message_id:mid},'pinChatMessage',{message_id:mid,disable_notification:true})});
 app.post('/api/groups/:id/delete-message',auth,(req,res,next)=>{const mid=Number(req.body.message_id);if(!Number.isSafeInteger(mid)||mid<=0)return res.sendStatus(400);execute(req,res,next,'delete_message',{message_id:mid},'deleteMessage',{message_id:mid})});
 app.post('/api/groups/:id/lock',auth,(req,res,next)=>{if(typeof req.body.lock!=='boolean')return res.sendStatus(400);const lock=req.body.lock;execute(req,res,next,lock?'lock_chat':'unlock_chat',{lock},'setChatPermissions',{permissions:{can_send_messages:!lock,can_send_audios:!lock,can_send_documents:!lock,can_send_photos:!lock,can_send_videos:!lock,can_send_video_notes:!lock,can_send_voice_notes:!lock,can_send_polls:!lock,can_send_other_messages:!lock,can_add_web_page_previews:!lock,can_change_info:false,can_invite_users:!lock,can_pin_messages:false,can_manage_topics:false}})});
+const startImageBot=mountImageBot(app,base);
 app.get('/health',(_req,res)=>res.json({status:'ok'}));
 app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)),'../public')));
 app.use((e,req,res,next)=>{console.error(e);res.status(400).json({error:e.message||'요청 실패'})});
 await init();const me=await tg('getMe');await tg('setWebhook',{url:base+'/telegram/webhook',secret_token:process.env.WEBHOOK_SECRET,allowed_updates:['message','edited_message','chat_member','my_chat_member'],drop_pending_updates:false});app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Admin bot started @'+me.username));
+startImageBot().catch(e=>console.error('image bot webhook setup:',e.message));
 reconcileGroups().catch(e=>console.error('startup membership reconciliation:',e.message));
 setInterval(()=>reconcileGroups().catch(e=>console.error('scheduled membership reconciliation:',e.message)),300000).unref();
 setInterval(()=>{for(const [id,v] of limits)if(v.every(t=>now()-t>600000))limits.delete(id);pool.query("DELETE FROM update_dedup WHERE created_at < NOW() - interval '7 days'").catch(console.error);pool.query('DELETE FROM admin_sessions WHERE expires_at<NOW()').catch(console.error)},3600000).unref();
