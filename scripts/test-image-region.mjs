@@ -32,6 +32,13 @@ try{
     const meta=await sharp(edited).metadata();
     assert.equal(meta.width,W);assert.equal(meta.height,H);
   }
+  const flatDark=await sharp({create:{width:1024,height:1024,channels:4,background:{r:2,g:2,b:2,alpha:1}}}).png().toBuffer();
+  globalThis.fetch=async()=>new Response(JSON.stringify({data:[{b64_json:flatDark.toString('base64')}]}),{status:200});
+  await assert.rejects(
+    ()=>reviseDesignRegion(source,{x:25,y:20,w:50,h:30},'Edit graphic'),
+    /검은 단색 영역/
+  );
+  globalThis.fetch=async()=>new Response(JSON.stringify({data:[{b64_json:aiOutput.toString('base64')}]}),{status:200});
   await assert.rejects(()=>reviseDesignRegion(source,{x:W-2,y:1,w:20,h:20},'test'),/수정 영역/);
   console.log('PASS: boundaries, isolated composite, dimensions, and invalid selection');
 }finally{
