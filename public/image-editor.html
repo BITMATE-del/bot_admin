@@ -5,7 +5,7 @@
 :root{color-scheme:dark}*{box-sizing:border-box}body{background:#0b1220;color:#f4f7fb;font:15px/1.5 system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;padding:18px}
 main{max-width:760px;margin:auto}.hint{color:#aab9cb}.panel{border:1px solid #304058;background:#141f30;border-radius:14px;padding:14px;margin-top:12px}h1{font-size:20px;margin:6px 0}
 .viewport{overflow:auto;background:#0a0f1a;max-height:70vh;border-radius:9px;touch-action:pan-y}
-canvas{display:block;max-width:100%;height:auto;touch-action:none;cursor:crosshair;margin:0 auto}
+.image-stage{position:relative;width:max-content;max-width:100%;margin:auto}#sourceImage{display:block;max-width:100%;height:auto}canvas{display:block;position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
 .fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
 label{display:block;color:#cad7e8;font-size:13px}input{background:#0a1220;color:#fff;border:1px solid #456077;border-radius:8px;padding:10px;width:100%;font:inherit}
 button{border:0;border-radius:10px;padding:12px 14px;font:inherit;font-weight:650;background:#2d71e8;color:white;cursor:pointer;width:100%}
@@ -19,7 +19,7 @@ button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{mi
 
 </style></head>
 <body><main><h1>수정할 글자 위치 선택</h1><p class="hint">원본 이미지에서 수정할 숫자를 손가락이나 마우스로 <strong>사각형으로 감싸 줘.</strong> 위치를 직접 선택해야 엉뚱한 글자를 바꾸지 않아.</p>
-<div class="panel"><div class="viewport"><canvas id="image"></canvas></div><div class="fields">
+<div class="panel"><div class="viewport"><div class="image-stage"><img id="sourceImage" alt="원본 이미지"/><canvas id="image"></canvas></div></div><div class="fields">
 <label>기존 문구<input id="before" readonly></label>
 <label>변경할 문구<input id="after" maxlength="70"></label>
 </div><label>글자 기울기 (°)<input id="angle" type="number" min="-60" max="60" step="1" value="0"></label>
@@ -37,8 +37,8 @@ const q=new URLSearchParams(location.search),job=q.get('job');
 const canvas=document.getElementById('image'),ctx=canvas.getContext('2d');
 const sub=document.getElementById('submit'),status=document.getElementById('status'),sel=document.getElementById('selection');
 const before=document.getElementById('before'),after=document.getElementById('after');
-let rect=null,start=null,active=false,image=null;
-function draw(){if(!image)return;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0);
+let rect=null,start=null,active=false;const image=document.getElementById('sourceImage');
+function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
  if(rect){ctx.fillStyle='rgba(239,54,64,.13)';ctx.fillRect(rect.x,rect.y,rect.w,rect.h);ctx.strokeStyle='#ff3b45';ctx.lineWidth=Math.max(2,canvas.width/230);ctx.strokeRect(rect.x,rect.y,rect.w,rect.h);}
 }
 function point(e){const b=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(canvas.width,(e.clientX-b.left)*canvas.width/b.width)),y:Math.max(0,Math.min(canvas.height,(e.clientY-b.top)*canvas.height/b.height))}}
@@ -118,7 +118,7 @@ try{
  if(!/^[0-9a-f]{32}$/.test(job||''))throw Error('링크가 올바르지 않아.');
  const r=await fetch('/api/image-job/'+job+'/info');if(!r.ok)throw Error('편집 링크가 만료됐어. 봇에서 다시 요청해 줘.');
  const info=await r.json();before.value=info.before;after.value=info.after;
- image=new Image();image.onload=()=>{canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;draw();};
+ image.onload=()=>{canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;draw();};
  image.onerror=()=>{status.textContent='이미지를 불러오지 못했어.'};
  image.src='/api/image-job/'+job+'/original';
 }catch(e){status.textContent=e.message;}
