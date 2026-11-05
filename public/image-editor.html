@@ -111,7 +111,12 @@ sub.addEventListener('click',async()=>{
    body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
   });
   const payload=await response.json();
-  if(!response.ok)throw Error(payload.error||'접수에 실패했어.');
+  if(!response.ok){
+    if(payload.code==='TEXT_REGION_TOO_NARROW'){
+      rect=null;draw();sel.textContent='글자가 잘리지 않도록 좌우 여백을 포함해 새 영역을 선택해 줘.';
+    }
+    throw Error(payload.error||'접수에 실패했어.');
+  }
   if(payload.state==='done'){renderProgress({progress:100,message:'완료',elapsedSeconds:0});status.textContent='완료! 텔레그램을 확인해 줘.';return;}
   renderProgress({progress:15,message:'접수 완료 · 이미지 준비 중',elapsedSeconds:0});
   status.textContent='접수 완료. 작업 상태를 확인하고 있어.';
