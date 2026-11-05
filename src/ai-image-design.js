@@ -123,6 +123,21 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
       bytes[alphaOffset]=Math.round(bytes[alphaOffset]*opacity);
     }
   }
+  // Avoid reporting a visually unchanged region as a successful edit.
+  const selectedOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
+    .ensureAlpha().raw().toBuffer();
+  let changedPixels=0;
+  for(let i=0;i<bytes.length;i+=channels){
+    const difference=Math.max(
+      Math.abs(bytes[i]-selectedOriginal[i]),
+      Math.abs(bytes[i+1]-selectedOriginal[i+1]),
+      Math.abs(bytes[i+2]-selectedOriginal[i+2])
+    );
+    if(difference>=8)changedPixels++;
+  }
+  if(changedPixels<Math.max(2,Math.floor(w*h*0.001))){
+    throw new Error('편집 결과에 실질적인 변화가 없어 전송하지 않았어. 수정 영역을 확인해 줘.');
+  }
   const blendedPatch=await sharp(bytes,{raw:{width:w,height:h,channels}})
     .png().toBuffer();
   // Compositing never modifies image pixels outside the selected rectangle.
