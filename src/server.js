@@ -213,7 +213,7 @@ app.post('/api/access-keys/:id/toggle',auth,ownerOnly,async(req,res,next)=>{cons
  await db.query('COMMIT');res.json({ok:true});
 }catch(e){await db.query('ROLLBACK');next(e)}finally{db.release()}});
 app.use('/api/groups/:id',auth,scopedGroup);
-app.post('/api/groups/reconcile',auth,ownerOnly,async(req,res,next)=>{try{
+app.post('/api/group-connections/reconcile',auth,ownerOnly,async(req,res,next)=>{try{
  if(limited('reconcile:'+requestIp(req),3,60000))return res.status(429).json({error:'잠시 후 다시 조회해 주세요'});
  await reconcileGroups();
  const active=await sql('SELECT COUNT(*)::int AS count FROM groups WHERE is_connected=TRUE');
