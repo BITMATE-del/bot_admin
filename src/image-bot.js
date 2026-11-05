@@ -4,8 +4,8 @@ import { createWorker } from 'tesseract.js';
 import { reviseDesignRegion } from './ai-image-design.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
-const editorOrigin = process.env.RAILWAY_PUBLIC_DOMAIN ? 'https://'+process.env.RAILWAY_PUBLIC_DOMAIN.replace(/^https?:\/\//,'').replace(/\/$/,'') : null;
-const editorUrl = jobId => (editorOrigin || process.env.PUBLIC_URL.replace(/\/$/,'')) + '/image-editor?job=' + encodeURIComponent(jobId);
+const editorOrigin = 'https://botadmin-production.up.railway.app';
+const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId);
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
@@ -171,7 +171,7 @@ async function sendPreview(chatId,buf,id,manualUrl){
   const form=new FormData();
   form.append('chat_id',String(chatId));
   form.append('caption','빨간 사각형이 수정하려는 위치야. 정확할 때만 [위치 확인 · 수정]을 눌러줘. 다른 위치면 취소하고 해당 부분을 확대해서 올려줘.');
-  form.append('reply_markup',JSON.stringify({inline_keyboard:[[{text:'✅ 위치 확인 · 수정',callback_data:'im:ok:'+id},{text:'❌ 취소',callback_data:'im:no:'+id}],[{text:'✏️ 위치 직접 선택',url:manualUrl}]]}));
+  form.append('reply_markup',JSON.stringify({inline_keyboard:[[{text:'✅ 위치 확인 · 수정',callback_data:'im:ok:'+id},{text:'❌ 취소',callback_data:'im:no:'+id}],[{text:'✏️ 텔레그램에서 위치 선택',web_app:{url:manualUrl}}],[{text:'🌐 브라우저로 열기',url:manualUrl}]]}));
   form.append('photo',new Blob([buf],{type:'image/png'}),'preview.png');
   const resp=await fetch('https://api.telegram.org/bot'+token+'/sendPhoto',{method:'POST',body:form,signal:AbortSignal.timeout(30000)});
   const json=await resp.json();if(!json.ok)throw new Error(json.description||'미리보기 전송 실패');
@@ -225,7 +225,7 @@ async function manualEdit(buf,{x,y,w,h,after,angle}){
 }
 async function sendManualLink(chatId,jobId,base){
   const url=editorUrl(jobId);
-  await tg('sendMessage',{chat_id:chatId,text:'인식 위치가 틀릴 때는 숫자 위치를 직접 선택해 줘. 아래 버튼으로 원본 이미지를 열어 수정할 글자만 사각형으로 선택하면 돼. (30분 유효)',reply_markup:{inline_keyboard:[[{text:'✏️ 수정할 위치 직접 선택',url}]]}});
+  await tg('sendMessage',{chat_id:chatId,text:'수정할 글자의 위치를 직접 선택할 수 있어. 아래 첫 버튼은 텔레그램 내부 화면, 두 번째는 외부 브라우저로 열어. 열리지 않으면 주소를 복사해서 크롬에 붙여넣어 줘. (30분 유효)\n\n'+url,disable_web_page_preview:true,reply_markup:{inline_keyboard:[[{text:'✏️ 텔레그램에서 위치 선택',web_app:{url}}],[{text:'🌐 브라우저로 열기',url}]]}});
 }
 
 async function handle(update,base){
@@ -277,6 +277,7 @@ async function handle(update,base){
     const id=crypto.randomBytes(8).toString('hex');
     pending.set(String(msg.from.id),{id,chatId,output,regions,buf:saved.buf,change:changes[0],created:Date.now()});
     await sendPreview(chatId,preview,id,editorUrl(manualId));
+    await send(chatId,'직접 위치 선택 링크: '+editorUrl(manualId)+'\n버튼으로 열리지 않으면 주소를 복사해 브라우저에서 열어줘.');
   }catch(e){
     console.warn('OCR preview unavailable; offering manual selection:',e.message);
     await send(chatId,'자동 위치 인식이 정확하지 않아 직접 선택 모드로 전환했어.');
