@@ -308,18 +308,33 @@ export function mountImageBot(app,base){
     res.set('Cache-Control','no-store').type('png');
     try{res.send(await sharp(job.buf).rotate().png().toBuffer());}catch{res.sendStatus(500);}
   });
-  app.post('/api/image-job/:id/apply',async(req,res)=>{
-    const job=getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
-    if(job.busy)return res.status(409).json({error:'이미 처리 중입니다.'});
-    job.busy=true;
-    try{
-      if(String(req.body?.after||'')!==job.change.to)throw new Error('변경 문구가 처음 입력한 내용과 다릅니다.');
-      const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
-      const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
-      await sendImage(job.chatId,output);
-      manualJobs.delete(job.id);
-      res.json({ok:true});
-    }catch(e){job.busy=false;console.error('manual image edit:',e.message);res.status(400).json({error:e.message});}
+
+  app.get('/api/image-job/:id/status',(req,res)=>{
+    const job=getManual(req);
+    if(!job)return res.status(404).json({state:'expired'});
+    res.set('Cache-Control','no-store').json({state:job.state||'ready',error:job.error||null});
+  });
+  app.post('/api/image-job/:id/apply',(req,res)=>{
+    const job=getManual(req);
+    if(!job)return res.status(404).json({error:'Expired edit request'});
+    if(job.state==='processing')return res.status(202).json({state:'processing'});
+    if(job.state==='done')return res.json({state:'done'});
+    if(String(req.body?.after||'')!==job.change.to)return res.status(400).json({error:'Unexpected replacement value'});
+    const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
+    if(!['x','y','w','h'].every(k=>Number.isInteger(values[k]))||!Number.isFinite(values.angle))return res.status(400).json({error:'Invalid edit selection'});
+    job.state='processing';job.error=null;
+    res.status(202).json({state:'processing'});
+    (async()=>{
+      try{
+        const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
+        await sendImage(job.chatId,output);
+        job.state='done';
+      }catch(error){
+        job.error=String(error.message||error).slice(0,240);
+        job.state='failed';
+        console.error('image editor task:',job.error);
+      }
+    })().catch(error=>console.error('image editor task unexpected:',error));
   });
   const recent=new Map();
   app.post('/telegram/image-webhook',async(req,res)=>{
