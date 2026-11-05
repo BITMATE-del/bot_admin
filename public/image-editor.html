@@ -43,7 +43,7 @@ function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
 }
 function point(e){const b=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(canvas.width,(e.clientX-b.left)*canvas.width/b.width)),y:Math.max(0,Math.min(canvas.height,(e.clientY-b.top)*canvas.height/b.height))}}
 function selection(a,b){return{x:Math.round(Math.min(a.x,b.x)),y:Math.round(Math.min(a.y,b.y)),w:Math.round(Math.abs(a.x-b.x)),h:Math.round(Math.abs(a.y-b.y))}}
-canvas.addEventListener('pointerdown',e=>{e.preventDefault();start=point(e);active=true;canvas.setPointerCapture(e.pointerId);rect=null;sub.disabled=true;});
+canvas.addEventListener('pointerdown',e=>{if(!image.complete||!image.naturalWidth){status.textContent='원본 이미지 로딩이 끝나지 않았어. 사진이 보이는지 확인해 줘.';return;}e.preventDefault();start=point(e);active=true;canvas.setPointerCapture(e.pointerId);rect=null;sub.disabled=true;});
 canvas.addEventListener('pointermove',e=>{if(!active)return;e.preventDefault();rect=selection(start,point(e));draw()});
 canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();active=false;rect=selection(start,point(e));sub.disabled=!rect||rect.w<4||rect.h<4;sel.textContent=sub.disabled?'숫자 둘레를 더 크게 선택해 줘.':'선택한 위치가 정확한지 확인하고 전송해 줘.';draw()});
 document.getElementById('clear').addEventListener('click',()=>{rect=null;sub.disabled=true;sel.textContent='선택 다시 하기: 숫자를 감싸 줘.';draw()});
@@ -141,7 +141,7 @@ try{
  };
  image.onload=ready;
  image.onerror=()=>{stage.style.minHeight='120px';status.textContent='원본 이미지를 불러오지 못했어. 원본 이미지 직접 보기에서 확인해 줘.';};
- image.src=sourcePath;
+ image.src=info.preview||sourcePath;
  if(image.complete && image.naturalWidth)ready();
 }catch(e){status.textContent=e.message;}
 })();
