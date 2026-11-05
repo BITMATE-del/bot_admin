@@ -3,6 +3,8 @@ import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
+const editorOrigin = process.env.RAILWAY_PUBLIC_DOMAIN ? 'https://'+process.env.RAILWAY_PUBLIC_DOMAIN.replace(/^https?:\/\//,'').replace(/\/$/,'') : null;
+const editorUrl = jobId => (editorOrigin || process.env.PUBLIC_URL.replace(/\/$/,'')) + '/image-editor?job=' + encodeURIComponent(jobId);
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
@@ -221,7 +223,7 @@ async function manualEdit(buf,{x,y,w,h,after,angle}){
   return sharp(original).composite([{input:Buffer.from(svg),left:0,top:0},{input:Buffer.from(mark),left:Math.max(0,W-95),top:Math.max(0,H-26)}]).png().toBuffer();
 }
 async function sendManualLink(chatId,jobId,base){
-  const url=base+'/image-editor.html?job='+jobId;
+  const url=editorUrl(jobId);
   await tg('sendMessage',{chat_id:chatId,text:'인식 위치가 틀릴 때는 숫자 위치를 직접 선택해 줘. 아래 버튼으로 원본 이미지를 열어 수정할 글자만 사각형으로 선택하면 돼. (30분 유효)',reply_markup:{inline_keyboard:[[{text:'✏️ 수정할 위치 직접 선택',url}]]}});
 }
 
@@ -267,7 +269,7 @@ async function handle(update,base){
     const {output,preview}=await replaceText(saved.buf,changes);
     const id=crypto.randomBytes(8).toString('hex');
     pending.set(String(msg.from.id),{id,chatId,output,created:Date.now()});
-    await sendPreview(chatId,preview,id,base+'/image-editor.html?job='+manualId);
+    await sendPreview(chatId,preview,id,editorUrl(manualId));
   }catch(e){
     console.warn('OCR preview unavailable; offering manual selection:',e.message);
     await send(chatId,'자동 위치 인식이 정확하지 않아 직접 선택 모드로 전환했어.');
