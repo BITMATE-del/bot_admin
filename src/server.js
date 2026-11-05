@@ -32,15 +32,26 @@ async function init(){
  CREATE TABLE IF NOT EXISTS audit(id BIGSERIAL PRIMARY KEY,operator_id BIGINT NOT NULL,chat_id BIGINT NOT NULL,action TEXT NOT NULL,target_id BIGINT,details JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS update_dedup(update_id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS admin_sessions(token_hash TEXT PRIMARY KEY,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW());
- ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;`);
+ ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;
+ CREATE TABLE IF NOT EXISTS recent_messages(chat_id BIGINT NOT NULL,message_id BIGINT NOT NULL,user_id BIGINT NOT NULL,first_name TEXT NOT NULL DEFAULT '',last_name TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',preview TEXT NOT NULL DEFAULT '',sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(chat_id,message_id));
+ CREATE INDEX IF NOT EXISTS recent_messages_by_group ON recent_messages(chat_id,sent_at DESC,message_id DESC);`);
 }
 async function remember(chat,user){if(!chat||!user||user.is_bot)return;await sql(`INSERT INTO members(chat_id,user_id,first_name,last_name,username) VALUES($1,$2,$3,$4,$5) ON CONFLICT(chat_id,user_id) DO UPDATE SET first_name=EXCLUDED.first_name,last_name=EXCLUDED.last_name,username=EXCLUDED.username,last_seen=NOW()`,[chat.id,user.id,user.first_name||'',user.last_name||'',user.username||''])}
+async function captureMessage(msg){
+ if(!msg?.from?.id||msg.from.is_bot||!msg.message_id||!msg.chat?.id)return;
+ const content=String(msg.text||msg.caption||((msg.photo||msg.video||msg.document||msg.voice||msg.sticker)?'[미디어 메시지]':'[기타 메시지]')).slice(0,240);
+ await sql(`INSERT INTO recent_messages(chat_id,message_id,user_id,first_name,last_name,username,preview,sent_at) VALUES($1,$2,$3,$4,$5,$6,$7,to_timestamp($8))
+ ON CONFLICT(chat_id,message_id) DO UPDATE SET preview=EXCLUDED.preview,first_name=EXCLUDED.first_name,last_name=EXCLUDED.last_name,username=EXCLUDED.username`,[
+ msg.chat.id,msg.message_id,msg.from.id,msg.from.first_name||'',msg.from.last_name||'',msg.from.username||'',content,msg.date||Math.floor(Date.now()/1000)]);
+ await sql(`DELETE FROM recent_messages WHERE chat_id=$1 AND (sent_at<NOW()-interval '7 days' OR message_id IN (
+ SELECT message_id FROM recent_messages WHERE chat_id=$1 ORDER BY sent_at DESC,message_id DESC OFFSET 50))`,[msg.chat.id]);
+}
 async function syncGroup(chat){if(!chat||!['supergroup','group'].includes(chat.type))return;await sql(`INSERT INTO groups(chat_id,title,username) VALUES($1,$2,$3) ON CONFLICT(chat_id) DO UPDATE SET title=EXCLUDED.title,username=COALESCE(EXCLUDED.username,groups.username),updated_at=NOW()`,[chat.id,chat.title||'그룹',chat.username||null]);}
 async function refreshGroup(id){const c=await tg('getChat',{chat_id:id});await syncGroup(c);const me=await tg('getMe');const status=await tg('getChatMember',{chat_id:id,user_id:me.id});const count=await tg('getChatMemberCount',{chat_id:id});await sql('UPDATE groups SET member_count=$2,bot_promote=$3,bot_change=$4,updated_at=NOW() WHERE chat_id=$1',[id,count,Boolean(status.can_promote_members),Boolean(status.can_change_info)]);return status}
 async function onUpdate(u){
  const msg=u.message||u.edited_message;
  if(msg?.chat?.type==='private'&&operators.has(String(msg.from?.id))&&msg.text?.startsWith('/start')){await tg('sendMessage',{chat_id:msg.chat.id,text:'🛡 비상 그룹 관리자 봇 연결 완료. 웹 관리 페이지에서 본인의 Telegram ID로 인증하세요.\n내 ID: '+msg.from.id});return}
- if(msg&&['supergroup','group'].includes(msg.chat?.type)){await syncGroup(msg.chat);await remember(msg.chat,msg.from);for(const m of msg.new_chat_members||[])await remember(msg.chat,m);if(msg.reply_to_message?.from)await remember(msg.chat,msg.reply_to_message.from);if(msg.new_chat_title)await syncGroup({...msg.chat,title:msg.new_chat_title});}
+ if(msg&&['supergroup','group'].includes(msg.chat?.type)){await syncGroup(msg.chat);await remember(msg.chat,msg.from);await captureMessage(msg);for(const m of msg.new_chat_members||[])await remember(msg.chat,m);if(msg.reply_to_message?.from)await remember(msg.chat,msg.reply_to_message.from);if(msg.new_chat_title)await syncGroup({...msg.chat,title:msg.new_chat_title});}
  if(u.chat_member){await syncGroup(u.chat_member.chat);await remember(u.chat_member.chat,u.chat_member.new_chat_member?.user)}
  if(u.my_chat_member){await syncGroup(u.my_chat_member.chat);try{await refreshGroup(u.my_chat_member.chat.id)}catch(e){console.error('bot membership refresh:',e.message)}}
 }
@@ -53,6 +64,11 @@ app.get('/api/me',auth,(req,res)=>res.json({operator:req.operator}));
 app.get('/api/groups',auth,async(req,res,next)=>{try{res.json(await sql('SELECT chat_id::text,title,username,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC'))}catch(e){next(e)}});
 app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info,rights:Object.fromEntries(rightKeys.map(k=>[k,!!status[k]]))})}catch(e){next(e)}});
 async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1',[id]);if(!r.length)throw new Error('등록되지 않은 그룹입니다')}
+app.get('/api/groups/:id/recent-messages',auth,async(req,res,next)=>{try{
+ const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);
+ const data=await sql(`SELECT message_id::text,user_id::text,first_name,last_name,username,preview,sent_at FROM recent_messages WHERE chat_id=$1 ORDER BY sent_at DESC,message_id DESC LIMIT 50`,[id]);
+ res.setHeader('Cache-Control','no-store');res.json(data);
+}catch(e){next(e)}});
 app.get('/api/groups/:id/members',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const q=String(req.query.q||'').trim().slice(0,80);const rows=await sql(`SELECT user_id::text,first_name,last_name,username,last_seen FROM members WHERE chat_id=$1 AND ($2='' OR lower(first_name||' '||last_name) LIKE '%'||lower($2)||'%' OR lower(username) LIKE '%'||lower($2)||'%' OR user_id::text LIKE '%'||$2||'%') ORDER BY last_seen DESC LIMIT 100`,[id,q]);res.json(rows)}catch(e){next(e)}});
 // MTProto lookup is opt-in; all results are verified against the selected group through Bot API.
 app.get('/api/mtproto/status',auth,(req,res)=>res.json({configured:mtprotoConfigured}));
