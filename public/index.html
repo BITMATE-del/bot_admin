@@ -96,13 +96,16 @@ async function loadAccessKeys(){
   item.innerHTML='<div class="row"><strong>'+escapeHtml(a.label)+'</strong><span class="badge">'+(a.active?'사용 중':'중지됨')+'</span></div><div class="item-sub">'+escapeHtml(names||'그룹 배정 없음')+'</div>';
   const buttons=document.createElement('div');buttons.className='row';buttons.style.marginTop='10px';buttons.style.justifyContent='flex-start';buttons.style.flexWrap='wrap';
   function addButton(name,action){const b=document.createElement('button');b.className='secondary';b.textContent=name;b.onclick=()=>action(a);buttons.append(b)}
-  addButton('그룹 수정',async a=>{
-   const name=prompt('담당자 구분 이름',a.label);if(name===null)return;
-   const selection=prompt('관리할 그룹의 번호를 쉼표로 입력하세요.\\n'+groups.map((g,i)=>(i+1)+'. '+g.title).join('\\n'),a.groups.map(id=>groups.findIndex(g=>g.chat_id===id)+1).filter(i=>i>0).join(','));
-   if(selection===null)return;
-   const idx=selection.split(',').map(x=>Number(x.trim())-1),ids=[...new Set(idx.map(i=>groups[i]?.chat_id))];
-   if(ids.some(x=>!x)||!ids.length)throw Error('올바른 그룹 번호를 선택하세요');
-   await api('/api/access-keys/'+a.id,{method:'PUT',body:JSON.stringify({label:name,groups:ids})});await loadAccessKeys();status('그룹 배정이 저장됐습니다.');
+  addButton('그룹 수정',a=>{
+   const editing=document.createElement('div');editing.style.cssText='background:#f3f6ff;border-radius:12px;padding:12px;margin:10px 0';
+   const caption=document.createElement('div');caption.textContent='이름과 관리할 그룹 선택';caption.className='item-title';editing.append(caption);
+   const name=document.createElement('input');name.value=a.label;name.maxLength=80;name.style.margin='10px 0';editing.append(name);
+   const checks=document.createElement('div');checks.style.cssText='max-height:220px;overflow:auto;display:grid;gap:8px';
+   for(const g of groups){const label=document.createElement('label');label.style.cssText='display:flex;align-items:center;gap:8px;font-size:13px';const cb=document.createElement('input');cb.type='checkbox';cb.value=g.chat_id;cb.checked=a.groups.includes(g.chat_id);cb.style.width='16px';label.append(cb,document.createTextNode(g.title));checks.append(label)}
+   editing.append(checks);
+   const save=document.createElement('button');save.className='primary';save.textContent='변경 저장';save.style.marginTop='12px';
+   save.onclick=()=>run(async()=>{const ids=[...checks.querySelectorAll('input:checked')].map(c=>c.value);if(!ids.length)throw Error('그룹을 하나 이상 선택해주세요');await api('/api/access-keys/'+a.id,{method:'PUT',body:JSON.stringify({label:name.value,groups:ids})});await loadAccessKeys();status('담당자 그룹 배정이 변경됐습니다.')});editing.append(save);
+   item.querySelector('.accessEdit')?.remove();editing.className='accessEdit';item.append(editing);
   });
   addButton('비밀번호 재발급',async a=>{
    if(!confirm(a.label+'의 기존 비밀번호를 무효화하고 새 비밀번호를 발급할까요?'))return;
