@@ -49,46 +49,103 @@ function findBox(words, phrase){
   if(matches.length!==1)throw new Error(matches.length?'같은 문구가 여러 곳에 있어 자동 수정이 중단됐습니다: '+phrase:'이미지에서 문구를 정확히 찾지 못했습니다: '+phrase);
   return matches[0];
 }
+function parseTarget(value){
+  const match=value.match(/^(?:첫\s*번째|첫\s*번)\s*(?:에\s*있는)?\s*(.+)$/);
+  if(match)return {phrase:match[1].trim(),index:0};
+  const last=value.match(/^(?:마지막)\s*(?:에\s*있는)?\s*(.+)$/);
+  if(last)return {phrase:last[1].trim(),index:-1};
+  return {phrase:value,index:null};
+}
+function pointToOriginal(x,y,angle,ow,oh,rw,rh){
+  const rad=angle*Math.PI/180,c=Math.cos(rad),s=Math.sin(rad);
+  const dx=x-rw/2,dy=y-rh/2;
+  return {x:c*dx-s*dy+ow/2,y:s*dx+c*dy+oh/2};
+}
+async function locate(worker, baseBuffer, scale, width,height, target){
+  const variants=[0,-12,12,-25,25,-40,40];
+  const found=[];
+  for(const angle of variants){
+    const rotated=angle===0?baseBuffer:await sharp(baseBuffer).rotate(angle,{background:'#ffffff'}).png().toBuffer();
+    const meta=await sharp(rotated).metadata();
+    const ocr=await worker.recognize(rotated,{}, {text:true,blocks:true});
+    const words=extractWords(ocr.data);
+    // OCR may detect the same text at multiple rotation angles; deduplicate by original position.
+    const goal=normal(target.phrase);
+    for(let i=0;i<words.length;i++){
+      let phrase='';
+      for(let j=i;j<Math.min(words.length,i+7);j++){
+        const w=words[j],prev=words[j-1];
+        if(j>i&&(Math.abs(w.bbox.y0-words[i].bbox.y0)>32*scale || w.bbox.x0<prev.bbox.x0-6*scale))break;
+        phrase+=normal(w.text);
+        if(phrase===goal){
+          const selected=words.slice(i,j+1);
+          const x0=Math.min(...selected.map(w=>w.bbox.x0))/scale,y0=Math.min(...selected.map(w=>w.bbox.y0))/scale;
+          const x1=Math.max(...selected.map(w=>w.bbox.x1))/scale,y1=Math.max(...selected.map(w=>w.bbox.y1))/scale;
+          const cx=(x0+x1)/2,cy=(y0+y1)/2;
+          const position=pointToOriginal(cx,cy,angle,width,height,meta.width/scale,meta.height/scale);
+          if(position.x>=0&&position.x<width&&position.y>=0&&position.y<height)
+            found.push({angle,x0,y0,x1,y1,cx,cy,position,confidence:selected.reduce((acc,w)=>acc+(w.confidence||0),0)/selected.length,rw:meta.width/scale,rh:meta.height/scale});
+          break;
+        }
+        if(phrase.length>goal.length)break;
+      }
+    }
+    if(found.length && target.index===null && angle===0)break;
+  }
+  const groups=[];
+  for(const m of found){
+    let g=groups.find(g=>Math.hypot(g.best.position.x-m.position.x,g.best.position.y-m.position.y)<12);
+    if(!g)groups.push(g={best:m});
+    else if(m.confidence>g.best.confidence)g.best=m;
+  }
+  groups.sort((a,b)=>a.best.position.y-b.best.position.y||a.best.position.x-b.best.position.x);
+  if(!groups.length)throw new Error('글자를 찾지 못했습니다: '+target.phrase+'. 이미지에서 해당 부분을 잘라 확대해서 다시 올려주세요.');
+  if(target.index===null&&groups.length>1)throw new Error('같은 문구가 '+groups.length+'곳에서 인식됐습니다. "첫번째에 있는 '+target.phrase+' > 새문구" 또는 "마지막 '+target.phrase+' > 새문구"로 지정해 주세요.');
+  return (target.index===-1?groups.at(-1):groups[0]).best;
+}
 async function replaceText(input,changes){
-  const meta=await sharp(input).metadata();
+  const upright=await sharp(input).rotate().png().toBuffer();
+  const meta=await sharp(upright).metadata();
   if(!meta.width||!meta.height||meta.width>MAX_SIDE||meta.height>MAX_SIDE)throw new Error('지원하지 않는 이미지 크기입니다.');
-  const scale=meta.width<800?3:meta.width<1400?2:1;
-  const enlarged=await sharp(input).rotate().resize({width:meta.width*scale}).png().toBuffer();
-  const enlargedMeta=await sharp(enlarged).metadata();
+  const width=meta.width,height=meta.height;
+  const scale=width<800?3:width<1400?2:1;
+  const enlarged=await sharp(upright).resize({width:width*scale}).png().toBuffer();
   const worker=await createWorker('kor+eng',1,{logger:()=>{}});
-  let result;
-  try {result=await worker.recognize(enlarged,{}, {text:true,blocks:true});}
-  finally {await worker.terminate();}
-  const words=extractWords(result.data);
-  if(!words.length)throw new Error('이미지에서 글자를 인식하지 못했습니다.');
-  let image=sharp(input).rotate().ensureAlpha();
-  const width=enlargedMeta.width/scale,height=enlargedMeta.height/scale;
   const overlays=[],regions=[];
-  const base=await sharp(input).rotate().ensureAlpha().raw().toBuffer({resolveWithObject:true});
-  const px=base.info.channels;
+  const base=await sharp(upright).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+  const channels=base.info.channels;
   const sample=(x,y)=>{
     const cx=Math.max(0,Math.min(Math.floor(x),base.info.width-1));
     const cy=Math.max(0,Math.min(Math.floor(y),base.info.height-1));
-    const i=(cy*base.info.width+cx)*px;
+    const i=(cy*base.info.width+cx)*channels;
     return [base.data[i],base.data[i+1],base.data[i+2]];
   };
-  for(const change of changes){
-    const b=findBox(words,change.from);
-    const box={left:Math.max(0,Math.floor(b.x0/scale)-2),top:Math.max(0,Math.floor(b.y0/scale)-2),right:Math.min(width,Math.ceil(b.x1/scale)+2),bottom:Math.min(height,Math.ceil(b.y1/scale)+2)};
-    if(regions.some(r=>box.left<r.right&&box.right>r.left&&box.top<r.bottom&&box.bottom>r.top))throw new Error('수정 영역이 겹칩니다.');
-    regions.push(box);
-    const w=Math.ceil(box.right-box.left),h=Math.ceil(box.bottom-box.top);
-    const rgb=sample(box.left-4,(box.top+box.bottom)/2);
-    const fill='rgb('+rgb.join(',')+')';
-    const size=Math.max(9,Math.round(h*0.78));
-    const rightAligned=box.right>width*0.55;
-    const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'"><rect width="100%" height="100%" fill="'+fill+'"/><text x="'+(rightAligned?w-2:2)+'" y="'+Math.round(h*.78)+'" fill="#eff3fa" font-size="'+size+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" font-weight="500" text-anchor="'+(rightAligned?'end':'start')+'">'+esc(change.to)+'</text></svg>';
-    overlays.push({input:Buffer.from(svg),left:box.left,top:box.top});
-  }
-  // A small disclosure in the returned image distinguishes it from an original statement.
+  try{
+    for(const change of changes){
+      const target=parseTarget(change.from);
+      const found=await locate(worker,enlarged,scale,width,height,target);
+      const padding=2;
+      const rw=found.x1-found.x0+padding*2,rh=found.y1-found.y0+padding*2;
+      const cx=found.cx,cy=found.cy;
+      const pos=found.position;
+      const px=Math.round(pos.x),py=Math.round(pos.y);
+      const region={left:px-rw/2-4,right:px+rw/2+4,top:py-rh/2-4,bottom:py+rh/2+4};
+      if(regions.some(r=>region.left<r.right&&region.right>r.left&&region.top<r.bottom&&region.bottom>r.top))throw new Error('수정할 문구 영역이 겹칩니다.');
+      regions.push(region);
+      const rgb=sample(pos.x,pos.y-Math.max(4,rh));
+      const luminance=(rgb[0]*.299+rgb[1]*.587+rgb[2]*.114);
+      const color=luminance>140?'#1d2026':'#f5f5f5';
+      const fill='rgb('+rgb.join(',')+')';
+      const angle=found.angle;
+      const fontSize=Math.max(9,Math.round(rh*.84));
+      // Only the detected text polygon is repainted; all other pixels are taken from the original.
+      const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'"><g transform="translate('+pos.x+' '+pos.y+') rotate('+(-angle)+')"><rect x="'+(-rw/2)+'" y="'+(-rh/2)+'" width="'+rw+'" height="'+rh+'" fill="'+fill+'"/><text x="0" y="'+(fontSize*.32)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" fill="'+color+'" text-anchor="middle">'+esc(change.to)+'</text></g></svg>';
+      overlays.push({input:Buffer.from(svg),left:0,top:0});
+    }
+  }finally{await worker.terminate();}
   const mark='<svg xmlns="http://www.w3.org/2000/svg" width="85" height="20"><rect width="85" height="20" rx="3" fill="#071321" fill-opacity=".85"/><text x="42" y="14" fill="#b8c8d9" font-family="Noto Sans CJK KR,sans-serif" font-size="11" text-anchor="middle">편집 이미지</text></svg>';
-  overlays.push({input:Buffer.from(mark),left:Math.max(0,Math.floor(width)-90),top:Math.max(0,Math.floor(height)-24)});
-  return await image.composite(overlays).png().toBuffer();
+  overlays.push({input:Buffer.from(mark),left:Math.max(0,width-90),top:Math.max(0,height-24)});
+  return await sharp(upright).ensureAlpha().composite(overlays).png().toBuffer();
 }
 async function sendImage(chatId,buf){
   const form=new FormData();
@@ -121,7 +178,7 @@ async function handle(update){
     const buf=await download(item.file_id);
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now()});
-    await send(chatId,'이미지를 받았어. 바꿀 문구를 보내줘.\n예: 36.05 > 921.42');
+    await send(chatId,'이미지를 받았어. 바꿀 문구를 보내줘.\n예: 36.05 > 921.42\n비스듬한 문구도 인식하며, 중복될 때는 첫번째에 있는 30 > 33처럼 입력해 줘.');
     return;
   }
   if(!msg.text)return;
