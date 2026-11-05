@@ -23,7 +23,7 @@ try{
     let changed=0;
     for(let y=0;y<H;y++)for(let x=0;x<W;x++){
       const index=(y*W+x)*4;
-      const differs=raw.some((_,c)=>c>=index&&c<index+4&&raw[c]!==original[c]);
+      const differs=raw[index]!==original[index]||raw[index+1]!==original[index+1]||raw[index+2]!==original[index+2]||raw[index+3]!==original[index+3];
       const inside=x>=selection.x&&x<selection.x+selection.w&&y>=selection.y&&y<selection.y+selection.h;
       assert.ok(inside||!differs,'Detected an edit outside the selected rectangle');
       if(inside&&differs)changed++;
