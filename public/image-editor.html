@@ -28,7 +28,7 @@ button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{mi
 <div id="progressPanel" class="progress-panel" hidden aria-live="polite">
 <div class="progress-top"><strong id="progressLabel">준비 중</strong><strong id="progressPercent">0%</strong></div>
 <div class="progress-track" role="progressbar" aria-label="편집 진행 단계" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack"><div class="progress-fill" id="progressFill"></div></div>
-<div class="progress-details"><span id="progressElapsed">경과 0초</span><span id="progressHint">실제 작업 단계 기준이며 남은 시간은 이미지마다 달라요.</span></div>
+<div class="progress-details"><span id="progressElapsed">경과 0초</span><span id="progressEta">예상 대기시간 계산 중</span></div><div class="progress-details" id="progressHint">실제 진행 단계와 소요 기록을 기반으로 추정해요.</div>
 </div>
 <div role="status" class="msg" id="status"></div></div>
 </main><script>
@@ -54,6 +54,7 @@ const progressLabel=document.getElementById('progressLabel');
 const progressPercent=document.getElementById('progressPercent');
 const progressElapsed=document.getElementById('progressElapsed');
 const progressHint=document.getElementById('progressHint');
+const progressEta=document.getElementById('progressEta');
 const progressTrack=document.getElementById('progressTrack');
 const renderProgress=(data)=>{
  panel.hidden=false;
@@ -63,7 +64,13 @@ const renderProgress=(data)=>{
  progressPercent.textContent=pct+'%';
  progressElapsed.textContent='경과 '+(Number(data.elapsedSeconds)||0)+'초';
  progressTrack.setAttribute('aria-valuenow',String(pct));
- progressHint.textContent=pct===100?'텔레그램에서 결과를 확인해 줘.':pct===0?'선택 영역을 확인해 줘.':'실제 처리 단계 기준 · AI 처리 시간은 이미지마다 달라요.';
+ const fmt=sec=>sec>=60?Math.floor(sec/60)+'분'+(sec%60?' '+sec%60+'초':''):sec+'초';
+ if(pct===100){progressEta.textContent='남은 시간 0초';progressHint.textContent='텔레그램에서 결과를 확인해 줘.';}
+ else if(data.etaBasis==='overdue'){progressEta.textContent='예상 범위 초과';progressHint.textContent='AI 편집이 계속 진행 중이야. 완료되면 텔레그램으로 전송돼.';}
+ else if(data.etaMinSeconds!=null&&data.etaMaxSeconds!=null){
+   progressEta.textContent='예상 남은 시간 '+fmt(data.etaMinSeconds)+' ~ '+fmt(data.etaMaxSeconds);
+   progressHint.textContent=data.etaBasis==='history'?'최근 완료 작업의 소요 시간 기준':'초기 추정 범위 · 실제 소요 시간은 달라질 수 있어.';
+ }else{progressEta.textContent='처리 대기 중';progressHint.textContent='작업 단계를 확인하고 있어.';}
 };
 async function statusPoll(){
  let connectionErrors=0;
