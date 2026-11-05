@@ -34,6 +34,9 @@ async function invoke(input,instruction,mask) {
   form.append('size','1024x1024');
   form.append('quality','high');
   form.append('output_format','png');
+  // Output is composited into an opaque source image. Do not accept an
+  // automatically chosen transparent background for regional editing.
+  form.append('background','opaque');
   const controller = new AbortController();
   const timer = setTimeout(()=>controller.abort(),150000);
   try {
