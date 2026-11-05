@@ -18,6 +18,8 @@ const promptFor = instruction => [
   instruction,
   'Preserve the original composition, typography, visual hierarchy, camera viewpoint, perspective, lighting, shadow, texture, colors and background unless the request explicitly changes them.',
   'Retain all unrelated text, numbers, faces, objects, spacing and layout. Do not redesign or add decorative elements.',
+  'For ordinary graphic design, prefer the visual conventions already shown in this image over default generated styles.',
+  'Match neighboring shapes, local spacing, edge softness and graphic consistency. Avoid changing the original background or adding new design motifs.',
   'Make the edited content visually consistent with the scene and the surrounding visual material.'
 ].join('\n');
 
