@@ -37,6 +37,7 @@ async function init(){
  CREATE TABLE IF NOT EXISTS access_key_groups(access_id BIGINT NOT NULL REFERENCES access_keys(id) ON DELETE CASCADE,chat_id BIGINT NOT NULL REFERENCES groups(chat_id) ON DELETE CASCADE,PRIMARY KEY(access_id,chat_id));
  CREATE INDEX IF NOT EXISTS access_key_groups_chat_idx ON access_key_groups(chat_id);
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;
+ ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_connected BOOLEAN NOT NULL DEFAULT TRUE;
  CREATE TABLE IF NOT EXISTS recent_messages(chat_id BIGINT NOT NULL,message_id BIGINT NOT NULL,user_id BIGINT NOT NULL,first_name TEXT NOT NULL DEFAULT '',last_name TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',preview TEXT NOT NULL DEFAULT '',sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(chat_id,message_id));
  CREATE INDEX IF NOT EXISTS recent_messages_by_group ON recent_messages(chat_id,sent_at DESC,message_id DESC);`);
 }
@@ -51,13 +52,60 @@ async function captureMessage(msg){
  SELECT message_id FROM recent_messages WHERE chat_id=$1 ORDER BY sent_at DESC,message_id DESC OFFSET 50))`,[msg.chat.id]);
 }
 async function syncGroup(chat){if(!chat||!['supergroup','group'].includes(chat.type))return;await sql(`INSERT INTO groups(chat_id,title,username) VALUES($1,$2,$3) ON CONFLICT(chat_id) DO UPDATE SET title=EXCLUDED.title,username=COALESCE(EXCLUDED.username,groups.username),updated_at=NOW()`,[chat.id,chat.title||'그룹',chat.username||null]);}
-async function refreshGroup(id){const c=await tg('getChat',{chat_id:id});await syncGroup(c);const me=await tg('getMe');const status=await tg('getChatMember',{chat_id:id,user_id:me.id});const count=await tg('getChatMemberCount',{chat_id:id});await sql('UPDATE groups SET member_count=$2,bot_promote=$3,bot_change=$4,updated_at=NOW() WHERE chat_id=$1',[id,count,Boolean(status.can_promote_members),Boolean(status.can_change_info)]);return status}
+const connectedStatus=status=>status==='administrator'||status==='member'||status==='creator'||status==='restricted';
+async function setGroupConnection(id,active){
+ await sql('UPDATE groups SET is_connected=$2,bot_promote=CASE WHEN $2 THEN bot_promote ELSE FALSE END,bot_change=CASE WHEN $2 THEN bot_change ELSE FALSE END,updated_at=NOW() WHERE chat_id=$1',[id,active]);
+}
+async function checkBotMembership(id,botId){
+ try{
+  const state=await tg('getChatMember',{chat_id:id,user_id:botId});
+  const connected=connectedStatus(state.status);
+  await setGroupConnection(id,connected);
+  return {connected,state};
+ }catch(e){
+  // If Telegram clearly says the bot can no longer access this group, hide it.
+  // On temporary network or rate-limit errors leave previous status untouched.
+  if(/bot was kicked|bot is not a member|chat not found|forbidden: bot|user not found/i.test(e.message)){
+   await setGroupConnection(id,false);return {connected:false,state:null};
+  }
+  throw e;
+ }
+}
+async function refreshGroup(id){
+ const me=await tg('getMe');
+ const checked=await checkBotMembership(id,me.id);
+ if(!checked.connected)throw new Error('봇이 이 그룹에서 추방되었거나 더 이상 참여 중이 아닙니다');
+ const c=await tg('getChat',{chat_id:id});await syncGroup(c);
+ const count=await tg('getChatMemberCount',{chat_id:id});
+ const status=checked.state;
+ await sql('UPDATE groups SET member_count=$2,bot_promote=$3,bot_change=$4,is_connected=TRUE,updated_at=NOW() WHERE chat_id=$1',[id,count,Boolean(status.can_promote_members),Boolean(status.can_change_info)]);
+ return status;
+}
+async function reconcileGroups(){
+ const me=await tg('getMe');
+ const rows=await sql('SELECT chat_id::text FROM groups');
+ for(const g of rows){
+  try{await checkBotMembership(g.chat_id,me.id)}
+  catch(e){console.warn('group membership check failed:',g.chat_id,e.message)}
+ }
+}
 async function onUpdate(u){
  const msg=u.message||u.edited_message;
  if(msg?.chat?.type==='private'&&operators.has(String(msg.from?.id))&&msg.text?.startsWith('/start')){await tg('sendMessage',{chat_id:msg.chat.id,text:'🛡 비상 그룹 관리자 봇 연결 완료. 웹 관리 페이지에서 본인의 Telegram ID로 인증하세요.\n내 ID: '+msg.from.id});return}
  if(msg&&['supergroup','group'].includes(msg.chat?.type)){await syncGroup(msg.chat);await remember(msg.chat,msg.from);await captureMessage(msg);for(const m of msg.new_chat_members||[])await remember(msg.chat,m);if(msg.reply_to_message?.from)await remember(msg.chat,msg.reply_to_message.from);if(msg.new_chat_title)await syncGroup({...msg.chat,title:msg.new_chat_title});}
  if(u.chat_member){await syncGroup(u.chat_member.chat);await remember(u.chat_member.chat,u.chat_member.new_chat_member?.user)}
- if(u.my_chat_member){await syncGroup(u.my_chat_member.chat);try{await refreshGroup(u.my_chat_member.chat.id)}catch(e){console.error('bot membership refresh:',e.message)}}
+ if(u.my_chat_member){
+  const event=u.my_chat_member;
+  await syncGroup(event.chat);
+  const nextStatus=event.new_chat_member?.status;
+  if(!connectedStatus(nextStatus)){
+   await setGroupConnection(event.chat.id,false);
+   console.log('Bot disconnected from group:',event.chat.id,nextStatus);
+  }else{
+   await setGroupConnection(event.chat.id,true);
+   try{await refreshGroup(event.chat.id)}catch(e){console.error('bot membership refresh:',e.message)}
+  }
+ }
 }
 app.post('/telegram/webhook',async(req,res)=>{if(!equal(req.get('x-telegram-bot-api-secret-token')||'',process.env.WEBHOOK_SECRET))return res.sendStatus(403);const u=req.body;if(!Number.isSafeInteger(u?.update_id))return res.sendStatus(400);try{const rows=await sql('INSERT INTO update_dedup(update_id) VALUES($1) ON CONFLICT DO NOTHING RETURNING update_id',[u.update_id]);if(rows.length){try{await onUpdate(u)}catch(err){await sql('DELETE FROM update_dedup WHERE update_id=$1',[u.update_id]);throw err}}return res.sendStatus(200)}catch(e){console.error('webhook:',e);return res.sendStatus(500)}});
 function cookie(req){return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>{const i=x.indexOf('=');return i<0?['','']:[x.slice(0,i).trim(),x.slice(i+1)]}))}
@@ -109,13 +157,13 @@ app.post('/api/auth/logout',auth,async(req,res,next)=>{try{
 }catch(e){next(e)}});
 app.get('/api/me',auth,(req,res)=>res.json({role:req.isOwner?'owner':'manager',access_id:req.accessId}));
 app.get('/api/groups',auth,async(req,res,next)=>{try{
- const q=req.isOwner?'SELECT chat_id::text,title,username,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC':
- 'SELECT g.chat_id::text,g.title,g.username,g.member_count,g.bot_promote,g.bot_change,g.updated_at FROM groups g JOIN access_key_groups ag ON ag.chat_id=g.chat_id WHERE ag.access_id=$1 ORDER BY g.updated_at DESC';
+ const q=req.isOwner?'SELECT chat_id::text,title,username,member_count,bot_promote,bot_change,updated_at FROM groups WHERE is_connected=TRUE ORDER BY updated_at DESC':
+ 'SELECT g.chat_id::text,g.title,g.username,g.member_count,g.bot_promote,g.bot_change,g.updated_at FROM groups g JOIN access_key_groups ag ON ag.chat_id=g.chat_id WHERE ag.access_id=$1 AND g.is_connected=TRUE ORDER BY g.updated_at DESC';
  res.json(await sql(q,req.isOwner?[]:[req.accessId]));
 }catch(e){next(e)}});
 function validateGroupIds(value){if(!Array.isArray(value)||value.length<1||value.length>100)throw new Error('관리할 그룹을 1개 이상 선택하세요');const ids=[...new Set(value.map(safeId))];if(ids.some(x=>!x))throw new Error('올바른 그룹 ID가 아닙니다');return ids}
 async function writeAssignments(db,id,ids){
- const known=await db.query('SELECT chat_id::text FROM groups WHERE chat_id=ANY($1::bigint[])',[ids]);
+ const known=await db.query('SELECT chat_id::text FROM groups WHERE is_connected=TRUE AND chat_id=ANY($1::bigint[])',[ids]);
  if(known.rows.length!==ids.length)throw new Error('존재하지 않는 그룹이 포함되어 있습니다');
  await db.query('DELETE FROM access_key_groups WHERE access_id=$1',[id]);
  for(const g of ids)await db.query('INSERT INTO access_key_groups(access_id,chat_id) VALUES($1,$2)',[id,g]);
@@ -165,8 +213,14 @@ app.post('/api/access-keys/:id/toggle',auth,ownerOnly,async(req,res,next)=>{cons
  await db.query('COMMIT');res.json({ok:true});
 }catch(e){await db.query('ROLLBACK');next(e)}finally{db.release()}});
 app.use('/api/groups/:id',auth,scopedGroup);
+app.post('/api/groups/reconcile',auth,ownerOnly,async(req,res,next)=>{try{
+ if(limited('reconcile:'+requestIp(req),3,60000))return res.status(429).json({error:'잠시 후 다시 조회해 주세요'});
+ await reconcileGroups();
+ const active=await sql('SELECT COUNT(*)::int AS count FROM groups WHERE is_connected=TRUE');
+ res.json({ok:true,connected_groups:active[0].count});
+}catch(e){next(e)}});
 app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info,rights:Object.fromEntries(rightKeys.map(k=>[k,!!status[k]]))})}catch(e){next(e)}});
-async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1',[id]);if(!r.length)throw new Error('등록되지 않은 그룹입니다')}
+async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1 AND is_connected=TRUE',[id]);if(!r.length)throw new Error('연결되지 않았거나 봇이 추방된 그룹입니다')}
 app.get('/api/groups/:id/recent-messages',auth,async(req,res,next)=>{try{
  const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);
  const data=await sql(`SELECT message_id::text,user_id::text,first_name,last_name,username,preview,sent_at FROM recent_messages WHERE chat_id=$1 ORDER BY sent_at DESC,message_id DESC LIMIT 50`,[id]);
@@ -244,4 +298,6 @@ app.get('/health',(_req,res)=>res.json({status:'ok'}));
 app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)),'../public')));
 app.use((e,req,res,next)=>{console.error(e);res.status(400).json({error:e.message||'요청 실패'})});
 await init();const me=await tg('getMe');await tg('setWebhook',{url:base+'/telegram/webhook',secret_token:process.env.WEBHOOK_SECRET,allowed_updates:['message','edited_message','chat_member','my_chat_member'],drop_pending_updates:false});app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Admin bot started @'+me.username));
+reconcileGroups().catch(e=>console.error('startup membership reconciliation:',e.message));
+setInterval(()=>reconcileGroups().catch(e=>console.error('scheduled membership reconciliation:',e.message)),300000).unref();
 setInterval(()=>{for(const [id,v] of limits)if(v.every(t=>now()-t>600000))limits.delete(id);pool.query("DELETE FROM update_dedup WHERE created_at < NOW() - interval '7 days'").catch(console.error);pool.query('DELETE FROM admin_sessions WHERE expires_at<NOW()').catch(console.error)},3600000).unref();
