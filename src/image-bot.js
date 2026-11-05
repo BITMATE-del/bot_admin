@@ -313,9 +313,21 @@ export function mountImageBot(app,base){
     if(!job||Date.now()-job.created>ttl)return null;
     return job;
   };
-  app.get('/api/image-job/:id/info',(req,res)=>{
+  app.get('/api/image-job/:id/info',async(req,res)=>{
     const job=getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
-    res.set('Cache-Control','no-store').json({before:job.change.from,after:job.change.to});
+    try{
+      // Ship a browser-safe, opaque JPEG preview inline to avoid broken
+      // PNG/image subrequests. The original buffer remains unchanged for output.
+      const preview=await sharp(job.buf).rotate().flatten({background:'#ffffff'})
+        .jpeg({quality:88,mozjpeg:true}).toBuffer();
+      res.set('Cache-Control','no-store').json({
+        before:job.change.from,after:job.change.to,
+        preview:'data:image/jpeg;base64,'+preview.toString('base64')
+      });
+    }catch(e){
+      console.error('image preview preparation failed:',e.message);
+      res.status(500).json({error:'원본 이미지 미리보기를 준비하지 못했어.'});
+    }
   });
   app.get('/api/image-job/:id/original',async(req,res)=>{
     const job=getManual(req);if(!job)return res.sendStatus(404);
