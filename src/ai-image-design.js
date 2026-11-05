@@ -95,3 +95,50 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
   // Only selected pixels are replaced. All remaining pixels are byte-identical in RGBA space.
   return sharp(upright).composite([{input:patch,left:x,top:y}]).png().toBuffer();
 }
+
+
+/**
+ * Turns minimal Korean editing requests into specific image-edit instructions.
+ * Image context disambiguates shorthand (skin retouch vs removing a person).
+ * Falls back to a conservative deterministic interpretation on API failures.
+ */
+const simpleInstructions = [
+  [/^(?:기미|잡티|주근깨)(?:\s*(?:제거|없애|지워|보정))?$/u,'Remove visible facial blemishes and dark spots naturally while preserving the original face, pores, skin texture, lighting, and identity.'],
+  [/^(?:피부\s*보정|피부\s*깨끗|피부\s*정리)$/u,'Gently retouch facial skin blemishes and uneven tones, preserving pores, facial features, expression, and natural lighting.'],
+  [/^(?:배경\s*사람|뒤\s*사람|뒷사람)\s*(?:제거|삭제|지워|없애)?$/u,'Remove the background person and reconstruct the scenery naturally. Preserve the main subject and camera framing.'],
+  [/^(?:배경\s*지워|누끼|배경\s*삭제)$/u,'Remove the background around the main subject while preserving its original shape and edges.'],
+  [/^(?:선명하게|화질\s*(?:좋게|개선|업)|고화질)$/u,'Improve clarity, reduce compression artifacts and blur while preserving all objects, text and the original framing.'],
+];
+export async function interpretImageRequest(sourceBuffer,shortRequest) {
+  const text=String(shortRequest||'').trim().slice(0,300);
+  if (!text) throw new Error('수정 내용을 한 단어라도 입력해 줘.');
+  for (const [pattern,prompt] of simpleInstructions) if(pattern.test(text))return prompt;
+  // Rich instructions already convey what to do. Avoid an unnecessary API call.
+  if (text.length>95)return text;
+  if (!process.env.OPENAI_API_KEY)return text;
+  try {
+    const thumb=await sharp(sourceBuffer).rotate().resize(512,512,{fit:'inside'}).jpeg({quality:70}).toBuffer();
+    const ctrl=new AbortController(),timeout=setTimeout(()=>ctrl.abort(),18000);
+    try {
+      const response=await fetch('https://api.openai.com/v1/chat/completions',{
+        method:'POST',headers:{Authorization:'Bearer '+process.env.OPENAI_API_KEY,'Content-Type':'application/json'},
+        signal:ctrl.signal,
+        body:JSON.stringify({
+          model:process.env.OPENAI_VISION_MODEL||'gpt-4.1-mini',
+          temperature:0.1,max_tokens:250,
+          messages:[
+            {role:'system',content:'You interpret extremely brief Korean photo editing requests. See the image. Return ONE clear concise English instruction for an image editing model, NOT an explanation. Infer ordinary user intent, e.g. "기미" means remove skin blemishes naturally; "옷 검정" means recolor the visible garment to black; "뒤 사람 지워" means remove only the background person. Match the visible image; keep subject identity, original layout, color, style, typography and unrelated content. Never invent extra changes. If ambiguous, stick to the least invasive likely meaning. Output plain instruction text only.'},
+            {role:'user',content:[{type:'text',text:'Image edit request: '+text},{type:'image_url',image_url:{url:'data:image/jpeg;base64,'+thumb.toString('base64'),detail:'low'}}]}
+          ]
+        })
+      });
+      if (!response.ok)return text;
+      const data=await response.json();
+      const interpreted=data?.choices?.[0]?.message?.content?.trim();
+      return interpreted && interpreted.length<900 ? interpreted : text;
+    } finally {clearTimeout(timeout);}
+  } catch(error) {
+    console.warn('AI instruction interpretation fallback:',error.message);
+    return text;
+  }
+}
