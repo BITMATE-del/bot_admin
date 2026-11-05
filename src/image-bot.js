@@ -152,9 +152,9 @@ async function replaceText(input,changes){
       const color=luminance>140?'#1d2026':'#f5f5f5';
       const fill='rgb('+rgb.join(',')+')';
       const angle=found.angle;
-      const fontSize=Math.max(9,Math.round(rh*.84));
+      const fontSize=Math.max(5,Math.min(Math.round(rh*.77),Math.floor((rw-3)/Math.max(1,Array.from(change.to).length)*1.42)));
       // Only the detected text polygon is repainted; all other pixels are taken from the original.
-      const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'"><g transform="translate('+pos.x+' '+pos.y+') rotate('+(-angle)+')"><rect x="'+(-rw/2)+'" y="'+(-rh/2)+'" width="'+rw+'" height="'+rh+'" fill="'+fill+'"/><text x="0" y="'+(fontSize*.32)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" fill="'+color+'" text-anchor="middle">'+esc(change.to)+'</text></g></svg>';
+      const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'"><defs><clipPath id="editbox"><rect x="'+(-rw/2)+'" y="'+(-rh/2)+'" width="'+rw+'" height="'+rh+'"/></clipPath></defs><g transform="translate('+pos.x+' '+pos.y+') rotate('+(-angle)+')"><rect x="'+(-rw/2)+'" y="'+(-rh/2)+'" width="'+rw+'" height="'+rh+'" fill="'+fill+'"/><g clip-path="url(#editbox)"><text x="0" y="'+(fontSize*.32)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" fill="'+color+'" text-anchor="middle">'+esc(change.to)+'</text></g></g></svg>';
       overlays.push({input:Buffer.from(svg),left:0,top:0});
     }
   }finally{await worker.terminate();}
@@ -217,8 +217,8 @@ async function manualEdit(buf,{x,y,w,h,after,angle}){
   const bg=around.map((_,i)=>Math.round(around.reduce((a,r)=>a+r[i],0)/3));
   const lum=bg[0]*.299+bg[1]*.587+bg[2]*.114;
   const fg=lum>140?'#191c20':'#f1f5fa';
-  const fontSize=Math.max(8,Math.min(90,Math.round(h*.91)));
-  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="rgb('+bg.join(',')+')"/><g transform="translate('+(x+w/2)+' '+(y+h/2)+') rotate('+angle+')"><text x="0" y="'+(fontSize*.34)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" text-anchor="middle" fill="'+fg+'">'+esc(after)+'</text></g></svg>';
+  const fontSize=Math.max(5,Math.min(90,Math.round(h*.75),Math.floor((w-4)/Math.max(1,Array.from(after).length)*1.38)));
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'"><defs><clipPath id="region"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'"/></clipPath></defs><g clip-path="url(#region)"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="rgb('+bg.join(',')+')"/><g transform="translate('+(x+w/2)+' '+(y+h/2)+') rotate('+angle+')"><text x="0" y="'+(fontSize*.34)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" text-anchor="middle" fill="'+fg+'">'+esc(after)+'</text></g></g></svg>';
   const mark='<svg xmlns="http://www.w3.org/2000/svg" width="90" height="22"><rect width="90" height="22" rx="3" fill="#08131e" fill-opacity=".88"/><text x="45" y="15" fill="#d2e0ef" font-size="11" font-family="Noto Sans CJK KR,sans-serif" text-anchor="middle">편집 이미지</text></svg>';
   return sharp(original).composite([{input:Buffer.from(svg),left:0,top:0},{input:Buffer.from(mark),left:Math.max(0,W-95),top:Math.max(0,H-26)}]).png().toBuffer();
 }
