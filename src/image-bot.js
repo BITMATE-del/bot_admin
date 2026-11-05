@@ -9,6 +9,20 @@ const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURICompon
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
+const successfulEditDurations=[];
+function estimateRemaining(state,elapsed){
+  if(state==='done')return {min:0,max:0,basis:'complete'};
+  if(state==='ready'||state==='failed')return {min:null,max:null,basis:'none'};
+  if(state==='sending')return {min:0,max:20,basis:'stage'};
+  const sorted=[...successfulEditDurations].sort((a,b)=>a-b);
+  const historical=sorted.length>=3;
+  const typical=historical?sorted[Math.floor(sorted.length/2)]:80;
+  const minTime=historical?Math.max(15,Math.floor(typical*0.6)):30;
+  const maxTime=historical?Math.max(minTime+30,Math.ceil(typical*1.8)):150;
+  if(elapsed>=maxTime)return {min:null,max:null,basis:'overdue'};
+  return {min:Math.max(0,minTime-elapsed),max:Math.max(0,maxTime-elapsed),basis:historical?'history':'initial'};
+}
+
 const MAX_IMAGE = 12 * 1024 * 1024;
 const MAX_SIDE = 5000;
 const ttl = 30 * 60 * 1000;
@@ -322,9 +336,11 @@ export function mountImageBot(app,base){
     };
     const state=job.state||'ready';
     const [progress,message]=stages[state]||stages.ready;
+    const elapsedSeconds=job.startedAt?Math.floor((Date.now()-job.startedAt)/1000):0;
+    const eta=estimateRemaining(state,elapsedSeconds);
     res.set('Cache-Control','no-store').json({
       state,progress,message,error:job.error||null,
-      elapsedSeconds:job.startedAt?Math.floor((Date.now()-job.startedAt)/1000):0
+      elapsedSeconds,etaMinSeconds:eta.min,etaMaxSeconds:eta.max,etaBasis:eta.basis
     });
   });
   app.post('/api/image-job/:id/apply',(req,res)=>{
@@ -344,6 +360,11 @@ export function mountImageBot(app,base){
         job.state='sending';
         await sendImage(job.chatId,output);
         job.state='done';
+        if(job.startedAt){
+          const secs=Math.max(1,Math.round((Date.now()-job.startedAt)/1000));
+          successfulEditDurations.push(secs);
+          if(successfulEditDurations.length>60)successfulEditDurations.shift();
+        }
       }catch(error){
         job.error=String(error.message||error).slice(0,240);
         job.state='failed';
