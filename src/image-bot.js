@@ -248,7 +248,7 @@ async function handle(update,base){
   if(!msg||msg.chat?.type!=='private')return;
   const chatId=msg.chat.id;
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'AI 이미지 수정 봇\n1. 사진 전송\n2. 짧은 수정 내용 전송\n예: 기미 / 옷 검정 / 뒤 사람 지워 / 100Lv 200Lv\n3. 수정 이미지 받기');
+    await send(chatId,'사진을 올리고 바꾸고 싶은 부분을 편하게 말해 줘. 짧게 말해도 이미지 내용을 보고 수정할게.');
     return;
   }
   const item=msg.photo?.at(-1)||((msg.document?.mime_type||'').startsWith('image/')?msg.document:null);
@@ -257,7 +257,7 @@ async function handle(update,base){
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now()});
     pending.delete(String(msg.from.id));
-    await send(chatId,'이미지 받았어. 간단하게만 말해도 돼.\n예: 기미\n예: 뒤 사람 삭제\n예: 옷 검정\n예: 100Lv 200Lv');
+    await send(chatId,'이미지를 받았어. 어디를 어떻게 수정할까? 짧게 말해도 돼.');
     return;
   }
   if(!msg.text)return;
@@ -267,7 +267,7 @@ async function handle(update,base){
   const changes=pairs(msg.text) || (compact && /\d/.test(compact[1]) && /\d/.test(compact[2]) ? [{from:compact[1],to:compact[2]}] : null);
   if(!changes){
     const request=msg.text.trim();
-    if(!request.length||request.length>300) {await send(chatId,'수정 내용을 짧게 적어줘. 예: 기미, 뒤 사람 삭제, 옷 검정');return;}
+    if(!request.length||request.length>300) {await send(chatId,'어떤 부분을 어떻게 수정할지 짧게 말해 줘.');return;}
     await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
     try {
       const instruction=await interpretImageRequest(saved.buf,request);
