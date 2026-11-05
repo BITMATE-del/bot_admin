@@ -1,0 +1,69 @@
+import express from 'express';
+import pg from 'pg';
+import helmet from 'helmet';
+import crypto from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const required = ['BOT_TOKEN','DATABASE_URL','PUBLIC_URL','WEBHOOK_SECRET','SESSION_SECRET','ADMIN_SECOND_PASSWORD','OPERATOR_TELEGRAM_IDS'];
+for (const key of required) if (!process.env[key]) throw new Error('Missing environment variable: '+key);
+if (process.env.SESSION_SECRET.length < 32 || process.env.WEBHOOK_SECRET.length < 16) throw new Error('Secrets are too short');
+const operators = new Set(process.env.OPERATOR_TELEGRAM_IDS.split(',').map(x=>x.trim()).filter(Boolean));
+if (!operators.size) throw new Error('At least one operator required');
+const token=process.env.BOT_TOKEN, base=process.env.PUBLIC_URL.replace(/\/$/,'');
+const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.PGSSL==='false'?false:{rejectUnauthorized:true}});
+const app=express();
+app.disable('x-powered-by');app.set('trust proxy',1);app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'100kb'}));
+const otpPending=new Map(), sessions=new Map(), limits=new Map();
+const now=()=>Date.now();
+const sign=s=>crypto.createHmac('sha256',process.env.SESSION_SECRET).update(s).digest('hex');
+const equal=(a,b)=>{const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&crypto.timingSafeEqual(x,y)};
+const safeId=x=>{const s=String(x??'');return /^-?\d{1,20}$/.test(s)?s:null};
+const positiveId=x=>{const s=String(x??'');return /^\d{1,20}$/.test(s)?s:null};
+const requestIp=req=>req.ip||'unknown';
+const limited=(key,max=8,windowMs=600000)=>{const old=limits.get(key)||[];const arr=old.filter(t=>now()-t<windowMs);arr.push(now());limits.set(key,arr);return arr.length>max};
+async function tg(method,data={}){const resp=await fetch('https://api.telegram.org/bot'+token+'/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(12000)});const json=await resp.json();if(!json.ok)throw new Error(json.description||'Telegram '+method+' failed');return json.result}
+async function sql(query,params=[]){return (await pool.query(query,params)).rows}
+async function init(){
+ await pool.query(`CREATE TABLE IF NOT EXISTS groups(chat_id BIGINT PRIMARY KEY,title TEXT NOT NULL,member_count INTEGER,bot_promote BOOLEAN DEFAULT FALSE,bot_change BOOLEAN DEFAULT FALSE,updated_at TIMESTAMPTZ DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS members(chat_id BIGINT NOT NULL,user_id BIGINT NOT NULL,first_name TEXT DEFAULT '',last_name TEXT DEFAULT '',username TEXT DEFAULT '',last_seen TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(chat_id,user_id));
+ CREATE INDEX IF NOT EXISTS members_search_idx ON members(chat_id, lower(first_name),lower(username));
+ CREATE TABLE IF NOT EXISTS audit(id BIGSERIAL PRIMARY KEY,operator_id BIGINT NOT NULL,chat_id BIGINT NOT NULL,action TEXT NOT NULL,target_id BIGINT,details JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS update_dedup(update_id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ DEFAULT NOW());`);
+}
+async function remember(chat,user){if(!chat||!user||user.is_bot)return;await sql(`INSERT INTO members(chat_id,user_id,first_name,last_name,username) VALUES($1,$2,$3,$4,$5) ON CONFLICT(chat_id,user_id) DO UPDATE SET first_name=EXCLUDED.first_name,last_name=EXCLUDED.last_name,username=EXCLUDED.username,last_seen=NOW()`,[chat.id,user.id,user.first_name||'',user.last_name||'',user.username||''])}
+async function syncGroup(chat){if(!chat||!['supergroup','group'].includes(chat.type))return;await sql(`INSERT INTO groups(chat_id,title) VALUES($1,$2) ON CONFLICT(chat_id) DO UPDATE SET title=EXCLUDED.title,updated_at=NOW()`,[chat.id,chat.title||'그룹']);}
+async function refreshGroup(id){const c=await tg('getChat',{chat_id:id});await syncGroup(c);const me=await tg('getMe');const status=await tg('getChatMember',{chat_id:id,user_id:me.id});const count=await tg('getChatMemberCount',{chat_id:id});await sql('UPDATE groups SET member_count=$2,bot_promote=$3,bot_change=$4,updated_at=NOW() WHERE chat_id=$1',[id,count,Boolean(status.can_promote_members),Boolean(status.can_change_info)]);return status}
+async function onUpdate(u){
+ const msg=u.message||u.edited_message;
+ if(msg?.chat?.type==='private'&&operators.has(String(msg.from?.id))&&msg.text?.startsWith('/start')){await tg('sendMessage',{chat_id:msg.chat.id,text:'🛡 비상 그룹 관리자 봇 연결 완료. 웹 관리 페이지에서 본인의 Telegram ID로 인증하세요.\n내 ID: '+msg.from.id});return}
+ if(msg&&['supergroup','group'].includes(msg.chat?.type)){await syncGroup(msg.chat);await remember(msg.chat,msg.from);for(const m of msg.new_chat_members||[])await remember(msg.chat,m);if(msg.reply_to_message?.from)await remember(msg.chat,msg.reply_to_message.from);if(msg.new_chat_title)await syncGroup({...msg.chat,title:msg.new_chat_title});}
+ if(u.chat_member){await syncGroup(u.chat_member.chat);await remember(u.chat_member.chat,u.chat_member.new_chat_member?.user)}
+ if(u.my_chat_member){await syncGroup(u.my_chat_member.chat);try{await refreshGroup(u.my_chat_member.chat.id)}catch(e){console.error('bot membership refresh:',e.message)}}
+}
+app.post('/telegram/webhook',async(req,res)=>{if(!equal(req.get('x-telegram-bot-api-secret-token')||'',process.env.WEBHOOK_SECRET))return res.sendStatus(403);const u=req.body;if(!Number.isSafeInteger(u?.update_id))return res.sendStatus(400);try{const rows=await sql('INSERT INTO update_dedup(update_id) VALUES($1) ON CONFLICT DO NOTHING RETURNING update_id',[u.update_id]);if(rows.length)await onUpdate(u);return res.sendStatus(200)}catch(e){console.error('webhook:',e);return res.sendStatus(500)}});
+function cookie(req){return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>{const i=x.indexOf('=');return i<0?['','']:[x.slice(0,i).trim(),x.slice(i+1)]}))}
+function auth(req,res,next){const v=cookie(req).sid||'';const [id,mac]=v.split('.');if(!id||!mac||!equal(sign(id),mac))return res.status(401).json({error:'로그인이 필요합니다'});const s=sessions.get(id);if(!s||s.expires<now()){sessions.delete(id);return res.status(401).json({error:'세션이 만료되었습니다'})}req.operator=s.operator;next()}
+app.post('/api/auth/request',async(req,res)=>{const id=positiveId(req.body.telegram_id);if(limited('otp:'+requestIp(req),5)||!id||!operators.has(id))return res.status(429).json({error:'인증 요청을 확인할 수 없습니다'});const code=String(crypto.randomInt(100000,999999));otpPending.set(id,{hash:sign(id+':'+code),expires:now()+300000,tries:0});try{await tg('sendMessage',{chat_id:id,text:'🔐 비상 관리자 로그인 인증번호: '+code+'\n5분 후 만료됩니다. 본인이 요청하지 않았다면 무시하세요.'});res.json({ok:true})}catch(e){otpPending.delete(id);res.status(400).json({error:'봇 개인 채팅에서 /start를 먼저 보내주세요'})}});
+app.post('/api/auth/login',(req,res)=>{if(limited('login:'+requestIp(req),12))return res.status(429).json({error:'시도가 너무 많습니다'});const id=positiveId(req.body.telegram_id),otp=otpPending.get(id),code=String(req.body.code||'');if(!id||!operators.has(id)||!otp||otp.expires<now()||++otp.tries>5||!equal(otp.hash,sign(id+':'+code))||!equal(req.body.password||'',process.env.ADMIN_SECOND_PASSWORD))return res.status(403).json({error:'인증정보가 올바르지 않습니다'});otpPending.delete(id);const sid=crypto.randomBytes(32).toString('hex');sessions.set(sid,{operator:id,expires:now()+8*3600000});res.setHeader('Set-Cookie',`sid=${sid}.${sign(sid)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`);res.json({ok:true})});
+app.post('/api/auth/logout',auth,(req,res)=>{const id=(cookie(req).sid||'').split('.')[0];sessions.delete(id);res.setHeader('Set-Cookie','sid=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0');res.json({ok:true})});
+app.get('/api/me',auth,(req,res)=>res.json({operator:req.operator}));
+app.get('/api/groups',auth,async(req,res,next)=>{try{res.json(await sql('SELECT chat_id::text,title,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC'))}catch(e){next(e)}});
+app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info})}catch(e){next(e)}});
+async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1',[id]);if(!r.length)throw new Error('등록되지 않은 그룹입니다')}
+app.get('/api/groups/:id/members',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const q=String(req.query.q||'').trim().slice(0,80);const rows=await sql(`SELECT user_id::text,first_name,last_name,username,last_seen FROM members WHERE chat_id=$1 AND ($2='' OR lower(first_name||' '||last_name) LIKE '%'||lower($2)||'%' OR lower(username) LIKE '%'||lower($2)||'%' OR user_id::text LIKE '%'||$2||'%') ORDER BY last_seen DESC LIMIT 100`,[id,q]);res.json(rows)}catch(e){next(e)}});
+app.get('/api/groups/:id/admins',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const admins=await tg('getChatAdministrators',{chat_id:id});res.json(admins.map(x=>({user_id:String(x.user.id),first_name:x.user.first_name||'',username:x.user.username||'',status:x.status,can_promote_members:!!x.can_promote_members,can_delete_messages:!!x.can_delete_messages})));}catch(e){next(e)}});
+const rightKeys=['can_manage_chat','can_change_info','can_delete_messages','can_manage_video_chats','can_restrict_members','can_promote_members','can_invite_users','can_pin_messages','can_manage_topics'];
+async function execute(req,res,next,action,params,method,body){try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);await tg(method,{chat_id:id,...body});await sql('INSERT INTO audit(operator_id,chat_id,action,target_id,details) VALUES($1,$2,$3,$4,$5)',[req.operator,id,action,params.target||null,JSON.stringify(params)]);res.json({ok:true})}catch(e){next(e)}}
+app.post('/api/groups/:id/promote',auth,async(req,res,next)=>{const target=positiveId(req.body.user_id);if(!target)return res.status(400).json({error:'유효한 사용자 ID가 아닙니다'});const rights={};for(const k of rightKeys)rights[k]=req.body.rights?.[k]===true;rights.can_manage_chat=true;rights.is_anonymous=false;rights.can_post_stories=false;rights.can_edit_stories=false;rights.can_delete_stories=false;try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const m=await tg('getChatMember',{chat_id:id,user_id:target});if(!['member','administrator','restricted'].includes(m.status)||m.status==='administrator'&&m.can_be_edited===false)return res.status(400).json({error:'대상 회원의 그룹 소속 또는 수정 권한을 확인할 수 없습니다'});if(m.status==='creator')return res.status(400).json({error:'소유자 권한은 변경할 수 없습니다'});await execute(req,res,next,'promote',{target,rights},'promoteChatMember',{user_id:target,...rights})}catch(e){next(e)}});
+app.post('/api/groups/:id/title',auth,(req,res,next)=>{const title=String(req.body.title||'').trim();if(!title||title.length>128)return res.sendStatus(400);execute(req,res,next,'set_title',{title},'setChatTitle',{title})});
+app.post('/api/groups/:id/description',auth,(req,res,next)=>{const description=String(req.body.description||'');if(description.length>255)return res.sendStatus(400);execute(req,res,next,'set_description',{description},'setChatDescription',{description})});
+app.post('/api/groups/:id/ban',auth,(req,res,next)=>{const target=positiveId(req.body.user_id);if(!target)return res.sendStatus(400);execute(req,res,next,'ban',{target},'banChatMember',{user_id:target})});
+app.post('/api/groups/:id/unban',auth,(req,res,next)=>{const target=positiveId(req.body.user_id);if(!target)return res.sendStatus(400);execute(req,res,next,'unban',{target},'unbanChatMember',{user_id:target,only_if_banned:true})});
+app.post('/api/groups/:id/invite',auth,(req,res,next)=>execute(req,res,next,'create_invite',{},'createChatInviteLink',{name:'Emergency admin generated',creates_join_request:false}));
+app.get('/api/groups/:id/audit',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);res.json(await sql('SELECT id,operator_id::text,action,target_id::text,details,created_at FROM audit WHERE chat_id=$1 ORDER BY id DESC LIMIT 100',[id]))}catch(e){next(e)}});
+app.get('/health',(_req,res)=>res.json({status:'ok'}));
+app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)),'../public')));
+app.use((e,req,res,next)=>{console.error(e);res.status(400).json({error:e.message||'요청 실패'})});
+await init();const me=await tg('getMe');await tg('setWebhook',{url:base+'/telegram/webhook',secret_token:process.env.WEBHOOK_SECRET,allowed_updates:['message','edited_message','chat_member','my_chat_member'],drop_pending_updates:false});app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Admin bot started @'+me.username));
+setInterval(()=>{for(const [id,v] of otpPending)if(v.expires<now())otpPending.delete(id);for(const [id,v] of sessions)if(v.expires<now())sessions.delete(id);for(const [id,v] of limits)if(v.every(t=>now()-t>600000))limits.delete(id);pool.query("DELETE FROM update_dedup WHERE created_at < NOW() - interval '7 days'").catch(console.error)},3600000).unref();
