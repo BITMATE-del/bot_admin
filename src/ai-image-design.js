@@ -20,6 +20,7 @@ const promptFor = instruction => [
   'Retain all unrelated text, numbers, faces, objects, spacing and layout. Do not redesign or add decorative elements.',
   'For ordinary graphic design, prefer the visual conventions already shown in this image over default generated styles.',
   'Match neighboring shapes, local spacing, edge softness and graphic consistency. Avoid changing the original background or adding new design motifs.',
+  'When editing a design label, preserve every character completely; do not truncate the first or last character. Keep the entire edited content comfortably inside the allowed area.',
   'Make the edited content visually consistent with the scene and the surrounding visual material.'
 ].join('\n');
 
