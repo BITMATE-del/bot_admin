@@ -35,13 +35,41 @@ canvas.addEventListener('pointerdown',e=>{e.preventDefault();start=point(e);acti
 canvas.addEventListener('pointermove',e=>{if(!active)return;e.preventDefault();rect=selection(start,point(e));draw()});
 canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();active=false;rect=selection(start,point(e));sub.disabled=!rect||rect.w<4||rect.h<4;sel.textContent=sub.disabled?'숫자 둘레를 더 크게 선택해 줘.':'선택한 위치가 정확한지 확인하고 전송해 줘.';draw()});
 document.getElementById('clear').addEventListener('click',()=>{rect=null;sub.disabled=true;sel.textContent='선택 다시 하기: 숫자를 감싸 줘.';draw()});
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function statusPoll(){
+  for(let i=0;i<120;i++){
+    await sleep(2000);
+    try{
+      const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/status',{cache:'no-store'});
+      if(!response.ok){if(response.status===404)throw Error('편집 요청이 만료됐어. 이미지를 다시 보내줘.');continue;}
+      const state=await response.json();
+      if(state.state==='done'){status.textContent='완료! 텔레그램에서 수정한 이미지를 확인해 줘.';return;}
+      if(state.state==='failed')throw Error(state.error||'이미지 수정에 실패했어.');
+      status.textContent='AI가 이미지를 수정하고 있어. 완료되면 텔레그램으로 보내줄게.';
+    }catch(error){
+      if(/실패|만료|API|Invalid|Expired|error|오류/.test(error.message||''))throw error;
+    }
+  }
+  status.textContent='편집이 길어지고 있어. 텔레그램에서 결과를 확인해 줘.';
+}
 sub.addEventListener('click',async()=>{
- if(!rect)return;sub.disabled=true;status.textContent='선택한 영역을 처리하고 있어요.';
+ if(!rect)return;
+ sub.disabled=true;
+ status.textContent='편집을 접수하고 있어.';
  try{
-  const r=await fetch('/api/image-job/'+encodeURIComponent(job)+'/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})});
-  const x=await r.json();if(!r.ok)throw Error(x.error||'전송 실패');
-  status.textContent='텔레그램으로 수정 이미지를 보냈어. 대화창에서 확인해 줘.';
- }catch(e){status.textContent='오류: '+e.message;sub.disabled=false;}
+  const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/apply',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
+  });
+  const payload=await response.json();
+  if(!response.ok)throw Error(payload.error||'접수에 실패했어.');
+  if(payload.state==='done'){status.textContent='완료! 텔레그램을 확인해 줘.';return;}
+  status.textContent='접수 완료. AI가 이미지를 수정하고 있어.';
+  await statusPoll();
+ }catch(error){
+  status.textContent='오류: '+(error.message==='Failed to fetch'?'서버 연결이 일시적으로 끊겼어. 다시 눌러줘.':error.message);
+  sub.disabled=false;
+ }
 });
 try{
  if(!/^[0-9a-f]{32}$/.test(job||''))throw Error('링크가 올바르지 않아.');
