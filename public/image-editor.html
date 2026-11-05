@@ -19,7 +19,7 @@ button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{mi
 
 </style></head>
 <body><main><h1>수정할 글자 위치 선택</h1><p class="hint">원본 이미지에서 수정할 숫자를 손가락이나 마우스로 <strong>사각형으로 감싸 줘.</strong> 위치를 직접 선택해야 엉뚱한 글자를 바꾸지 않아.</p>
-<div class="panel"><div class="viewport"><div class="image-stage"><img id="sourceImage" alt="원본 이미지"/><canvas id="image"></canvas></div></div><div class="fields">
+<div class="panel"><div class="viewport"><div class="image-stage"><img id="sourceImage" alt="원본 이미지"/><canvas id="image"></canvas></div></div><a id="sourceFileLink" style="display:block;margin:9px 0;color:#a9c7f6;font-size:13px" target="_blank" rel="noopener">원본 이미지 직접 보기</a><div class="fields">
 <label>기존 문구<input id="before" readonly></label>
 <label>변경할 문구<input id="after" maxlength="70"></label>
 </div><label>글자 기울기 (°)<input id="angle" type="number" min="-60" max="60" step="1" value="0"></label>
@@ -120,6 +120,7 @@ try{
  const info=await r.json();before.value=info.before;after.value=info.after;
  image.onload=()=>{canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;draw();};
  image.onerror=()=>{status.textContent='이미지를 불러오지 못했어.'};
+ document.getElementById('sourceFileLink').href='/api/image-job/'+encodeURIComponent(job)+'/original';
  image.src='/api/image-job/'+job+'/original';
 }catch(e){status.textContent=e.message;}
 })();
