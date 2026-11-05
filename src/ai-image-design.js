@@ -90,7 +90,12 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
   for(let i=0;i<transparency.length;i++)rgba[i*4+3]=transparency[i];
   const mask=await sharp(rgba,{raw:{width:1024,height:1024,channels:4}}).png().toBuffer();
   const generated=await invoke(crop,instruction,mask);
-  const fitted=await sharp(generated).resize(1024,1024).extract({left:offsetX,top:offsetY,width:fitW,height:fitH}).resize(cropW,cropH).png().toBuffer();
+  // Materialize each resize before extraction: sharp otherwise may reorder
+  // extract operations and attempt cropping at incompatible source dimensions.
+  const generatedAt1024=await sharp(generated).resize(1024,1024,{fit:'fill'}).png().toBuffer();
+  const contextualPatch=await sharp(generatedAt1024)
+    .extract({left:offsetX,top:offsetY,width:fitW,height:fitH}).png().toBuffer();
+  const fitted=await sharp(contextualPatch).resize(cropW,cropH,{fit:'fill'}).png().toBuffer();
   const patch=await sharp(fitted).extract({left:x-cropLeft,top:y-cropTop,width:w,height:h}).png().toBuffer();
   // Only selected pixels are replaced. All remaining pixels are byte-identical in RGBA space.
   return sharp(upright).composite([{input:patch,left:x,top:y}]).png().toBuffer();
