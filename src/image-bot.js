@@ -18,13 +18,23 @@ const tg = async (method, data) => {
 };
 const send = (id,text) => tg('sendMessage',{chat_id:id,text});
 const normal = s => String(s).normalize('NFKC').replace(/\s/g,'').toLowerCase();
-const pairs = s => String(s).split(/\n/).map(x=>x.trim()).filter(Boolean).map(row=>{
-  const m = row.match(/^(.+?)\s*(?:→|->|>)\s*(.+)$/);
-  if(!m)throw new Error('수정 명령 형식: 기존문구 > 새문구');
-  const from=m[1].trim(),to=m[2].trim();
-  if(from.length<1||from.length>70||to.length<1||to.length>70)throw new Error('문구는 각각 1~70자로 입력하세요.');
+const parseChange = raw => {
+  const row=String(raw).trim().normalize('NFKC');
+  const arrow=row.match(/^(.+?)\s*(?:→|->|>|⇒|➜)\s*(.+)$/);
+  const natural=row.match(/^(.+?)(?:을|를)\s+(.+?)(?:으로|로)\s*(?:바꿔줘|바꿔|변경해줘|변경|수정해줘|수정|교체해줘|교체|바꾸기|변경하기)[.! ]*$/);
+  const naturalShort=row.match(/^(.+?)(?:을|를)\s+(.+?)(?:으로|로)\s*$/);
+  const match=arrow||natural||naturalShort;
+  if(!match)return null;
+  const from=match[1].trim(),to=match[2].trim();
+  if(!from||!to||from.length>70||to.length>70)return null;
   return {from,to};
-});
+};
+const pairs = s => {
+  const lines=String(s).split(/\n/).map(x=>x.trim()).filter(Boolean);
+  const parsed=lines.map(parseChange);
+  if(parsed.some(x=>!x))return null;
+  return parsed;
+};
 function extractWords(data){
   const out=[];
   const add=w=>{const b=w.bbox;if(w.text&&b&&Number.isFinite(b.x0)&&Number.isFinite(b.y0))out.push({text:String(w.text),bbox:b,confidence:w.confidence||0});};
@@ -178,13 +188,14 @@ async function handle(update){
     const buf=await download(item.file_id);
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now()});
-    await send(chatId,'이미지를 받았어. 바꿀 문구를 보내줘.\n예: 36.05 > 921.42\n비스듬한 문구도 인식하며, 중복될 때는 첫번째에 있는 30 > 33처럼 입력해 줘.');
+    await send(chatId,'이미지를 받았어. 바꿀 문구를 보내줘.\n예: 36.05 > 921.42\n또는: 36.05를 921.42로 바꿔줘\n비스듬한 문구도 인식하며, 중복될 때는 첫번째에 있는 30 > 33처럼 입력해 줘.');
     return;
   }
   if(!msg.text)return;
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
   const changes=pairs(msg.text);
+  if(!changes){await send(chatId,'수정할 내용을 이해하지 못했어. 아래 중 편한 방식으로 보내줘.\n\n30 > 33\n30을 33으로 바꿔줘\n첫번째에 있는 30을 33으로 바꿔줘\n\n이미지는 다시 보내지 않아도 돼.');return;}
   if(changes.length>8)throw new Error('한 번에 8개까지만 수정할 수 있어요.');
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
   const output=await replaceText(saved.buf,changes);
