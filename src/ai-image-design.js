@@ -123,6 +123,28 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
       bytes[alphaOffset]=Math.round(bytes[alphaOffset]*opacity);
     }
   }
+  // Reject a solid dark fill generated in place of actual content.
+  // Compare with the selected source so genuinely dark UI regions are not
+  // mistaken for failed edits.
+  const originalRegion=await sharp(upright)
+    .extract({left:x,top:y,width:w,height:h}).ensureAlpha().raw().toBuffer();
+  let outputDark=0,sourceDark=0,outputR=0,outputG=0,outputB=0;
+  let outputR2=0,outputG2=0,outputB2=0;
+  const pixelCount=w*h;
+  for(let i=0;i<bytes.length;i+=channels){
+    const r=bytes[i],g=bytes[i+1],b=bytes[i+2];
+    if(Math.max(r,g,b)<38)outputDark++;
+    if(Math.max(originalRegion[i],originalRegion[i+1],originalRegion[i+2])<38)sourceDark++;
+    outputR+=r;outputG+=g;outputB+=b;
+    outputR2+=r*r;outputG2+=g*g;outputB2+=b*b;
+  }
+  const variance=Math.max(0,
+    (outputR2+outputG2+outputB2)/(pixelCount*3)-
+    (outputR*outputR+outputG*outputG+outputB*outputB)/(pixelCount*pixelCount*3)
+  );
+  if(outputDark/pixelCount>.91 && sourceDark/pixelCount<.55 && variance<180){
+    throw new Error('AI가 수정 내용 대신 검은 영역을 생성해 결과를 폐기했어. 원본은 유지됐어.');
+  }
   // Avoid reporting a visually unchanged region as a successful edit.
   const selectedOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
     .ensureAlpha().raw().toBuffer();
