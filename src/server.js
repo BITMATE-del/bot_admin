@@ -51,7 +51,7 @@ app.post('/api/auth/login',async(req,res,next)=>{try{if(limited('login:'+request
 app.post('/api/auth/logout',auth,async(req,res,next)=>{try{const sid=cookie(req).sid||'';await sql('DELETE FROM admin_sessions WHERE token_hash=$1',[sign(sid)]);res.setHeader('Set-Cookie','sid=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0');res.json({ok:true})}catch(e){next(e)}});
 app.get('/api/me',auth,(req,res)=>res.json({operator:req.operator}));
 app.get('/api/groups',auth,async(req,res,next)=>{try{res.json(await sql('SELECT chat_id::text,title,username,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC'))}catch(e){next(e)}});
-app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info})}catch(e){next(e)}});
+app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info,rights:Object.fromEntries(rightKeys.map(k=>[k,!!status[k]]))})}catch(e){next(e)}});
 async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1',[id]);if(!r.length)throw new Error('등록되지 않은 그룹입니다')}
 app.get('/api/groups/:id/members',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const q=String(req.query.q||'').trim().slice(0,80);const rows=await sql(`SELECT user_id::text,first_name,last_name,username,last_seen FROM members WHERE chat_id=$1 AND ($2='' OR lower(first_name||' '||last_name) LIKE '%'||lower($2)||'%' OR lower(username) LIKE '%'||lower($2)||'%' OR user_id::text LIKE '%'||$2||'%') ORDER BY last_seen DESC LIMIT 100`,[id,q]);res.json(rows)}catch(e){next(e)}});
 // MTProto lookup is opt-in; all results are verified against the selected group through Bot API.
@@ -92,6 +92,14 @@ app.post('/api/groups/:id/promote',auth,async(req,res,next)=>{
  try{
   const id=safeId(req.params.id);if(!id)return res.sendStatus(400);
   await assertGroup(id);
+  const me=await tg('getMe');
+  const bot=await tg('getChatMember',{chat_id:id,user_id:me.id});
+  if(bot.status!=='administrator'||!bot.can_promote_members)return res.status(403).json({error:'봇에게 새 관리자 임명 권한이 없습니다. 텔레그램 그룹 관리자 설정에서 봇의 관리자 추가 권한을 켜주세요.'});
+  const granted=rightKeys.filter(k=>rights[k]===true && bot[k]!==true && k!=='can_manage_chat');
+  if(granted.length){
+    const labels={can_change_info:'그룹 정보 변경',can_delete_messages:'메시지 삭제',can_manage_video_chats:'영상 채팅 관리',can_restrict_members:'회원 차단·제한',can_promote_members:'다른 관리자 임명',can_invite_users:'초대 링크 관리',can_pin_messages:'메시지 고정',can_manage_topics:'주제 관리'};
+    return res.status(400).json({error:'봇에게 없는 권한을 임명할 수 없습니다: '+granted.map(k=>labels[k]||k).join(', ')+'. 체크를 해제하거나 텔레그램에서 봇 권한을 추가해주세요.',unavailable_rights:granted});
+  }
   const before=await tg('getChatMember',{chat_id:id,user_id:target});
   if(before.status==='creator')return res.status(400).json({error:'소유자 권한은 변경할 수 없습니다'});
   if(!['member','administrator','restricted'].includes(before.status)||(before.status==='administrator'&&before.can_be_edited===false))return res.status(400).json({error:'대상 회원의 그룹 소속 또는 수정 권한을 확인할 수 없습니다'});
