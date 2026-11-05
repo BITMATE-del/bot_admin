@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
+import { reviseDesignRegion } from './ai-image-design.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = process.env.RAILWAY_PUBLIC_DOMAIN ? 'https://'+process.env.RAILWAY_PUBLIC_DOMAIN.replace(/^https?:\/\//,'').replace(/\/$/,'') : null;
@@ -164,7 +165,7 @@ async function replaceText(input,changes){
   const marker=regions.map((r,i)=>'<rect x="'+Math.max(0,r.left)+'" y="'+Math.max(0,r.top)+'" width="'+Math.max(1,r.right-r.left)+'" height="'+Math.max(1,r.bottom-r.top)+'" fill="none" stroke="#fa3b32" stroke-width="3"/><text x="'+Math.max(0,r.left)+'" y="'+Math.max(16,r.top-5)+'" fill="#ffffff" stroke="#000000" stroke-width="3" paint-order="stroke" font-size="16" font-family="sans-serif">수정위치 '+(i+1)+'</text>').join('');
   const previewSvg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'">'+marker+'</svg>';
   const preview=await sharp(upright).composite([{input:Buffer.from(previewSvg),left:0,top:0}]).png().toBuffer();
-  return {output,preview};
+  return {output,preview,regions};
 }
 async function sendPreview(chatId,buf,id,manualUrl){
   const form=new FormData();
@@ -238,7 +239,13 @@ async function handle(update,base){
     if(parts[1]!=='ok')return;
     pending.delete(key);
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'확인했어. 수정 이미지를 전송할게.'});
-    await sendImage(job.chatId,job.output);
+    try {
+      const region=job.regions?.[0];
+      const output=(process.env.IMAGE_EDIT_PROVIDER==='openai' && region)
+        ? await reviseDesignRegion(job.buf,{x:Math.max(0,Math.floor(region.left)),y:Math.max(0,Math.floor(region.top)),w:Math.max(4,Math.floor(region.right-region.left)),h:Math.max(4,Math.floor(region.bottom-region.top))},'Revise the selected design number from '+job.change.from+' to '+job.change.to+'. Match original font and perspective without other design changes.')
+        : job.output;
+      await sendImage(job.chatId,output);
+    } catch(error) { await send(job.chatId,'AI 편집 실패: '+error.message); }
     return;
   }
   const msg=update.message;
@@ -266,9 +273,9 @@ async function handle(update,base){
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
   const manualId=makeManualJob(chatId,saved.buf,changes[0]);
   try{
-    const {output,preview}=await replaceText(saved.buf,changes);
+    const {output,preview,regions}=await replaceText(saved.buf,changes);
     const id=crypto.randomBytes(8).toString('hex');
-    pending.set(String(msg.from.id),{id,chatId,output,created:Date.now()});
+    pending.set(String(msg.from.id),{id,chatId,output,regions,buf:saved.buf,change:changes[0],created:Date.now()});
     await sendPreview(chatId,preview,id,editorUrl(manualId));
   }catch(e){
     console.warn('OCR preview unavailable; offering manual selection:',e.message);
@@ -300,7 +307,9 @@ export function mountImageBot(app,base){
     try{
       if(String(req.body?.after||'')!==job.change.to)throw new Error('변경 문구가 처음 입력한 내용과 다릅니다.');
       const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
-      const output=await manualEdit(job.buf,{...values,after:job.change.to});
+      const output=process.env.IMAGE_EDIT_PROVIDER==='openai'
+        ? await reviseDesignRegion(job.buf,values,'Revise the selected design value from '+job.change.from+' to '+job.change.to+'. Match original font, image texture and perspective. Keep all other design elements unchanged.')
+        : await manualEdit(job.buf,{...values,after:job.change.to});
       await sendImage(job.chatId,output);
       manualJobs.delete(job.id);
       res.json({ok:true});
