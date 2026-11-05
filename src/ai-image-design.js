@@ -57,7 +57,10 @@ export async function editWholeImage(sourceBuffer,instruction) {
   const displayWidth = Math.min(1024,Math.round(width*aspect));
   const displayHeight = Math.min(1024,Math.round(height*aspect));
   const left = Math.floor((1024-displayWidth)/2),top=Math.floor((1024-displayHeight)/2);
-  const normalized = await sharp(output).resize(1024,1024,{fit:'fill'}).extract({left,top,width:displayWidth,height:displayHeight}).resize(width,height).png().toBuffer();
+  const normalizedCanvas=await sharp(output).resize(1024,1024,{fit:'fill'}).png().toBuffer();
+  const normalizedCrop=await sharp(normalizedCanvas)
+    .extract({left,top,width:displayWidth,height:displayHeight}).png().toBuffer();
+  const normalized=await sharp(normalizedCrop).resize(width,height,{fit:'fill'}).png().toBuffer();
   return normalized;
 }
 
