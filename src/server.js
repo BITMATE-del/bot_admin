@@ -32,6 +32,10 @@ async function init(){
  CREATE TABLE IF NOT EXISTS audit(id BIGSERIAL PRIMARY KEY,operator_id BIGINT NOT NULL,chat_id BIGINT NOT NULL,action TEXT NOT NULL,target_id BIGINT,details JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS update_dedup(update_id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS admin_sessions(token_hash TEXT PRIMARY KEY,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW());
+ ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS access_id BIGINT;
+ CREATE TABLE IF NOT EXISTS access_keys(id BIGSERIAL PRIMARY KEY,label TEXT NOT NULL,password_salt TEXT NOT NULL,password_hash TEXT NOT NULL,active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS access_key_groups(access_id BIGINT NOT NULL REFERENCES access_keys(id) ON DELETE CASCADE,chat_id BIGINT NOT NULL REFERENCES groups(chat_id) ON DELETE CASCADE,PRIMARY KEY(access_id,chat_id));
+ CREATE INDEX IF NOT EXISTS access_key_groups_chat_idx ON access_key_groups(chat_id);
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;
  CREATE TABLE IF NOT EXISTS recent_messages(chat_id BIGINT NOT NULL,message_id BIGINT NOT NULL,user_id BIGINT NOT NULL,first_name TEXT NOT NULL DEFAULT '',last_name TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',preview TEXT NOT NULL DEFAULT '',sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(chat_id,message_id));
  CREATE INDEX IF NOT EXISTS recent_messages_by_group ON recent_messages(chat_id,sent_at DESC,message_id DESC);`);
@@ -57,11 +61,110 @@ async function onUpdate(u){
 }
 app.post('/telegram/webhook',async(req,res)=>{if(!equal(req.get('x-telegram-bot-api-secret-token')||'',process.env.WEBHOOK_SECRET))return res.sendStatus(403);const u=req.body;if(!Number.isSafeInteger(u?.update_id))return res.sendStatus(400);try{const rows=await sql('INSERT INTO update_dedup(update_id) VALUES($1) ON CONFLICT DO NOTHING RETURNING update_id',[u.update_id]);if(rows.length){try{await onUpdate(u)}catch(err){await sql('DELETE FROM update_dedup WHERE update_id=$1',[u.update_id]);throw err}}return res.sendStatus(200)}catch(e){console.error('webhook:',e);return res.sendStatus(500)}});
 function cookie(req){return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>{const i=x.indexOf('=');return i<0?['','']:[x.slice(0,i).trim(),x.slice(i+1)]}))}
-async function auth(req,res,next){try{const sid=cookie(req).sid||'';if(!/^[a-f0-9]{64}$/.test(sid))return res.status(401).json({error:'로그인이 필요합니다'});const hash=sign(sid);const rows=await sql('SELECT token_hash FROM admin_sessions WHERE token_hash=$1 AND expires_at>NOW()',[hash]);if(!rows.length)return res.status(401).json({error:'세션이 만료되었습니다'});req.operator='0';next()}catch(e){next(e)}}
-app.post('/api/auth/login',async(req,res,next)=>{try{if(limited('login:'+requestIp(req),8))return res.status(429).json({error:'로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.'});const password=String(req.body.password||'');if(!equal(password,process.env.ADMIN_SECOND_PASSWORD))return res.status(403).json({error:'관리자 비밀번호가 올바르지 않습니다'});const sid=crypto.randomBytes(32).toString('hex');await sql("INSERT INTO admin_sessions(token_hash,expires_at) VALUES($1,NOW()+INTERVAL '30 days')",[sign(sid)]);res.setHeader('Set-Cookie',`sid=${sid}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`);res.json({ok:true})}catch(e){next(e)}});
-app.post('/api/auth/logout',auth,async(req,res,next)=>{try{const sid=cookie(req).sid||'';await sql('DELETE FROM admin_sessions WHERE token_hash=$1',[sign(sid)]);res.setHeader('Set-Cookie','sid=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0');res.json({ok:true})}catch(e){next(e)}});
-app.get('/api/me',auth,(req,res)=>res.json({operator:req.operator}));
-app.get('/api/groups',auth,async(req,res,next)=>{try{res.json(await sql('SELECT chat_id::text,title,username,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC'))}catch(e){next(e)}});
+const hashPassword=(password,salt)=>crypto.scryptSync(password,Buffer.from(salt,'hex'),64).toString('hex');
+const newAccessPassword=()=>crypto.randomBytes(18).toString('base64url');
+async function auth(req,res,next){try{
+ const sid=cookie(req).sid||'';
+ if(!/^[a-f0-9]{64}$/.test(sid))return res.status(401).json({error:'로그인이 필요합니다'});
+ const rows=await sql(`SELECT s.access_id::text AS access_id,k.active FROM admin_sessions s LEFT JOIN access_keys k ON k.id=s.access_id
+ WHERE s.token_hash=$1 AND s.expires_at>NOW()`,[sign(sid)]);
+ if(!rows.length)return res.status(401).json({error:'세션이 만료되었습니다'});
+ const accessId=rows[0].access_id;
+ if(accessId!==null && rows[0].active!==true)return res.status(401).json({error:'관리 권한이 중지됐습니다. 본사에 문의하세요.'});
+ req.accessId=accessId;
+ req.isOwner=accessId===null;
+ req.operator=accessId===null?'0':('-'+accessId);
+ next();
+}catch(e){next(e)}}
+function ownerOnly(req,res,next){if(!req.isOwner)return res.status(403).json({error:'본사 관리자만 사용할 수 있습니다'});next()}
+async function scopedGroup(req,res,next){try{
+ const id=safeId(req.params.id);
+ if(!id)return res.status(400).json({error:'잘못된 그룹 ID'});
+ if(req.isOwner)return next();
+ const allowed=await sql('SELECT 1 FROM access_key_groups WHERE access_id=$1 AND chat_id=$2',[req.accessId,id]);
+ if(!allowed.length)return res.status(403).json({error:'이 그룹에 대한 관리 권한이 없습니다'});
+ next();
+}catch(e){next(e)}}
+app.post('/api/auth/login',async(req,res,next)=>{try{
+ if(limited('login:'+requestIp(req),8))return res.status(429).json({error:'로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.'});
+ const password=String(req.body.password||'');
+ let accessId=null;
+ if(!equal(password,process.env.ADMIN_SECOND_PASSWORD)){
+  const keys=await sql('SELECT id::text,password_salt,password_hash FROM access_keys WHERE active=TRUE');
+  let match=null;
+  for(const k of keys){const test=hashPassword(password,k.password_salt);if(equal(test,k.password_hash))match=k.id}
+  if(!match)return res.status(403).json({error:'관리자 비밀번호가 올바르지 않습니다'});
+  accessId=match;
+ }
+ const sid=crypto.randomBytes(32).toString('hex');
+ await sql("INSERT INTO admin_sessions(token_hash,expires_at,access_id) VALUES($1,NOW()+INTERVAL '30 days',$2)",[sign(sid),accessId]);
+ res.setHeader('Set-Cookie',`sid=${sid}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`);
+ res.json({ok:true,role:accessId===null?'owner':'manager'});
+}catch(e){next(e)}});
+app.post('/api/auth/logout',auth,async(req,res,next)=>{try{
+ const sid=cookie(req).sid||'';
+ await sql('DELETE FROM admin_sessions WHERE token_hash=$1',[sign(sid)]);
+ res.setHeader('Set-Cookie','sid=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0');
+ res.json({ok:true});
+}catch(e){next(e)}});
+app.get('/api/me',auth,(req,res)=>res.json({role:req.isOwner?'owner':'manager',access_id:req.accessId}));
+app.get('/api/groups',auth,async(req,res,next)=>{try{
+ const q=req.isOwner?'SELECT chat_id::text,title,username,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC':
+ 'SELECT g.chat_id::text,g.title,g.username,g.member_count,g.bot_promote,g.bot_change,g.updated_at FROM groups g JOIN access_key_groups ag ON ag.chat_id=g.chat_id WHERE ag.access_id=$1 ORDER BY g.updated_at DESC';
+ res.json(await sql(q,req.isOwner?[]:[req.accessId]));
+}catch(e){next(e)}});
+function validateGroupIds(value){if(!Array.isArray(value)||value.length<1||value.length>100)throw new Error('관리할 그룹을 1개 이상 선택하세요');const ids=[...new Set(value.map(safeId))];if(ids.some(x=>!x))throw new Error('올바른 그룹 ID가 아닙니다');return ids}
+async function writeAssignments(db,id,ids){
+ const known=await db.query('SELECT chat_id::text FROM groups WHERE chat_id=ANY($1::bigint[])',[ids]);
+ if(known.rows.length!==ids.length)throw new Error('존재하지 않는 그룹이 포함되어 있습니다');
+ await db.query('DELETE FROM access_key_groups WHERE access_id=$1',[id]);
+ for(const g of ids)await db.query('INSERT INTO access_key_groups(access_id,chat_id) VALUES($1,$2)',[id,g]);
+}
+app.get('/api/access-keys',auth,ownerOnly,async(req,res,next)=>{try{
+ const rows=await sql(`SELECT a.id::text,a.label,a.active,a.created_at,a.updated_at,
+ COALESCE(array_agg(ag.chat_id::text) FILTER(WHERE ag.chat_id IS NOT NULL),'{}') AS groups
+ FROM access_keys a LEFT JOIN access_key_groups ag ON a.id=ag.access_id
+ GROUP BY a.id ORDER BY a.id DESC`);
+ res.setHeader('Cache-Control','no-store');res.json(rows);
+}catch(e){next(e)}});
+app.post('/api/access-keys',auth,ownerOnly,async(req,res,next)=>{const db=await pool.connect();try{
+ const label=String(req.body.label||'').trim().slice(0,80);if(!label)throw new Error('담당자 또는 관리 비밀번호 이름을 입력하세요');
+ const ids=validateGroupIds(req.body.groups);
+ const password=newAccessPassword(),salt=crypto.randomBytes(16).toString('hex'),hash=hashPassword(password,salt);
+ await db.query('BEGIN');
+ const result=await db.query('INSERT INTO access_keys(label,password_salt,password_hash) VALUES($1,$2,$3) RETURNING id::text',[label,salt,hash]);
+ await writeAssignments(db,result.rows[0].id,ids);
+ await db.query('COMMIT');
+ res.json({ok:true,id:result.rows[0].id,password});
+}catch(e){await db.query('ROLLBACK');next(e)}finally{db.release()}});
+app.put('/api/access-keys/:id',auth,ownerOnly,async(req,res,next)=>{const db=await pool.connect();try{
+ const id=positiveId(req.params.id);if(!id)return res.sendStatus(400);
+ const label=String(req.body.label||'').trim().slice(0,80),ids=validateGroupIds(req.body.groups);
+ if(!label)throw new Error('담당자명을 입력하세요');
+ await db.query('BEGIN');
+ const row=await db.query('UPDATE access_keys SET label=$2,updated_at=NOW() WHERE id=$1 RETURNING id',[id,label]);
+ if(!row.rowCount)throw new Error('관리 비밀번호를 찾을 수 없습니다');
+ await writeAssignments(db,id,ids);
+ await db.query('COMMIT');res.json({ok:true});
+}catch(e){await db.query('ROLLBACK');next(e)}finally{db.release()}});
+app.post('/api/access-keys/:id/rotate',auth,ownerOnly,async(req,res,next)=>{const db=await pool.connect();try{
+ const id=positiveId(req.params.id);if(!id)return res.sendStatus(400);
+ const password=newAccessPassword(),salt=crypto.randomBytes(16).toString('hex'),hash=hashPassword(password,salt);
+ await db.query('BEGIN');
+ const r=await db.query('UPDATE access_keys SET password_salt=$2,password_hash=$3,updated_at=NOW() WHERE id=$1 RETURNING id',[id,salt,hash]);
+ if(!r.rowCount)throw new Error('관리 비밀번호를 찾을 수 없습니다');
+ await db.query('DELETE FROM admin_sessions WHERE access_id=$1',[id]);
+ await db.query('COMMIT');res.json({ok:true,password});
+}catch(e){await db.query('ROLLBACK');next(e)}finally{db.release()}});
+app.post('/api/access-keys/:id/toggle',auth,ownerOnly,async(req,res,next)=>{const db=await pool.connect();try{
+ const id=positiveId(req.params.id);if(!id||typeof req.body.active!=='boolean')return res.sendStatus(400);
+ await db.query('BEGIN');
+ const r=await db.query('UPDATE access_keys SET active=$2,updated_at=NOW() WHERE id=$1 RETURNING id',[id,req.body.active]);
+ if(!r.rowCount)throw new Error('관리 비밀번호를 찾을 수 없습니다');
+ await db.query('DELETE FROM admin_sessions WHERE access_id=$1',[id]);
+ await db.query('COMMIT');res.json({ok:true});
+}catch(e){await db.query('ROLLBACK');next(e)}finally{db.release()}});
+app.use('/api/groups/:id',auth,scopedGroup);
 app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info,rights:Object.fromEntries(rightKeys.map(k=>[k,!!status[k]]))})}catch(e){next(e)}});
 async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1',[id]);if(!r.length)throw new Error('등록되지 않은 그룹입니다')}
 app.get('/api/groups/:id/recent-messages',auth,async(req,res,next)=>{try{
