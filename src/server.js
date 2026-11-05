@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mtprotoConfigured, resolveTelegramUsername, fetchGroupParticipants } from './mtproto.js';
 
 const required = ['BOT_TOKEN','DATABASE_URL','PUBLIC_URL','WEBHOOK_SECRET','SESSION_SECRET','ADMIN_SECOND_PASSWORD','OPERATOR_TELEGRAM_IDS'];
 for (const key of required) if (!process.env[key]) throw new Error('Missing environment variable: '+key);
@@ -30,10 +31,11 @@ async function init(){
  CREATE INDEX IF NOT EXISTS members_search_idx ON members(chat_id, lower(first_name),lower(username));
  CREATE TABLE IF NOT EXISTS audit(id BIGSERIAL PRIMARY KEY,operator_id BIGINT NOT NULL,chat_id BIGINT NOT NULL,action TEXT NOT NULL,target_id BIGINT,details JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS update_dedup(update_id BIGINT PRIMARY KEY,created_at TIMESTAMPTZ DEFAULT NOW());
- CREATE TABLE IF NOT EXISTS admin_sessions(token_hash TEXT PRIMARY KEY,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW());`);
+ CREATE TABLE IF NOT EXISTS admin_sessions(token_hash TEXT PRIMARY KEY,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW());
+ ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;`);
 }
 async function remember(chat,user){if(!chat||!user||user.is_bot)return;await sql(`INSERT INTO members(chat_id,user_id,first_name,last_name,username) VALUES($1,$2,$3,$4,$5) ON CONFLICT(chat_id,user_id) DO UPDATE SET first_name=EXCLUDED.first_name,last_name=EXCLUDED.last_name,username=EXCLUDED.username,last_seen=NOW()`,[chat.id,user.id,user.first_name||'',user.last_name||'',user.username||''])}
-async function syncGroup(chat){if(!chat||!['supergroup','group'].includes(chat.type))return;await sql(`INSERT INTO groups(chat_id,title) VALUES($1,$2) ON CONFLICT(chat_id) DO UPDATE SET title=EXCLUDED.title,updated_at=NOW()`,[chat.id,chat.title||'그룹']);}
+async function syncGroup(chat){if(!chat||!['supergroup','group'].includes(chat.type))return;await sql(`INSERT INTO groups(chat_id,title,username) VALUES($1,$2,$3) ON CONFLICT(chat_id) DO UPDATE SET title=EXCLUDED.title,username=COALESCE(EXCLUDED.username,groups.username),updated_at=NOW()`,[chat.id,chat.title||'그룹',chat.username||null]);}
 async function refreshGroup(id){const c=await tg('getChat',{chat_id:id});await syncGroup(c);const me=await tg('getMe');const status=await tg('getChatMember',{chat_id:id,user_id:me.id});const count=await tg('getChatMemberCount',{chat_id:id});await sql('UPDATE groups SET member_count=$2,bot_promote=$3,bot_change=$4,updated_at=NOW() WHERE chat_id=$1',[id,count,Boolean(status.can_promote_members),Boolean(status.can_change_info)]);return status}
 async function onUpdate(u){
  const msg=u.message||u.edited_message;
@@ -48,10 +50,30 @@ async function auth(req,res,next){try{const sid=cookie(req).sid||'';if(!/^[a-f0-
 app.post('/api/auth/login',async(req,res,next)=>{try{if(limited('login:'+requestIp(req),8))return res.status(429).json({error:'로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.'});const password=String(req.body.password||'');if(!equal(password,process.env.ADMIN_SECOND_PASSWORD))return res.status(403).json({error:'관리자 비밀번호가 올바르지 않습니다'});const sid=crypto.randomBytes(32).toString('hex');await sql("INSERT INTO admin_sessions(token_hash,expires_at) VALUES($1,NOW()+INTERVAL '30 days')",[sign(sid)]);res.setHeader('Set-Cookie',`sid=${sid}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`);res.json({ok:true})}catch(e){next(e)}});
 app.post('/api/auth/logout',auth,async(req,res,next)=>{try{const sid=cookie(req).sid||'';await sql('DELETE FROM admin_sessions WHERE token_hash=$1',[sign(sid)]);res.setHeader('Set-Cookie','sid=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0');res.json({ok:true})}catch(e){next(e)}});
 app.get('/api/me',auth,(req,res)=>res.json({operator:req.operator}));
-app.get('/api/groups',auth,async(req,res,next)=>{try{res.json(await sql('SELECT chat_id::text,title,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC'))}catch(e){next(e)}});
+app.get('/api/groups',auth,async(req,res,next)=>{try{res.json(await sql('SELECT chat_id::text,title,username,member_count,bot_promote,bot_change,updated_at FROM groups ORDER BY updated_at DESC'))}catch(e){next(e)}});
 app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info})}catch(e){next(e)}});
 async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1',[id]);if(!r.length)throw new Error('등록되지 않은 그룹입니다')}
 app.get('/api/groups/:id/members',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const q=String(req.query.q||'').trim().slice(0,80);const rows=await sql(`SELECT user_id::text,first_name,last_name,username,last_seen FROM members WHERE chat_id=$1 AND ($2='' OR lower(first_name||' '||last_name) LIKE '%'||lower($2)||'%' OR lower(username) LIKE '%'||lower($2)||'%' OR user_id::text LIKE '%'||$2||'%') ORDER BY last_seen DESC LIMIT 100`,[id,q]);res.json(rows)}catch(e){next(e)}});
+// MTProto lookup is opt-in; all results are verified against the selected group through Bot API.
+app.get('/api/mtproto/status',auth,(req,res)=>res.json({configured:mtprotoConfigured}));
+app.post('/api/groups/:id/resolve-username',auth,async(req,res,next)=>{try{
+ const chatId=safeId(req.params.id);if(!chatId)return res.sendStatus(400);await assertGroup(chatId);
+ if(limited('resolve:'+req.operator+':'+requestIp(req),15,60000))return res.status(429).json({error:'조회 요청이 너무 많습니다'});
+ const u=await resolveTelegramUsername(req.body.username);
+ const member=await tg('getChatMember',{chat_id:chatId,user_id:u.user_id});
+ if(!['member','administrator','restricted','creator'].includes(member.status))return res.status(404).json({error:'이 사용자는 선택한 그룹의 회원이 아닙니다'});
+ const person=member.user||{};
+ await remember({id:chatId},{id:u.user_id,first_name:person.first_name||u.first_name,last_name:person.last_name||u.last_name,username:person.username||u.username});
+ res.json({user_id:u.user_id,first_name:person.first_name||u.first_name,last_name:person.last_name||u.last_name,username:person.username||u.username,status:member.status});
+}catch(e){next(e)}});
+app.post('/api/groups/:id/sync-members',auth,async(req,res,next)=>{try{
+ const chatId=safeId(req.params.id);if(!chatId)return res.sendStatus(400);await assertGroup(chatId);
+ if(limited('sync:'+req.operator+':'+chatId,3,300000))return res.status(429).json({error:'그룹 동기화는 5분당 3회까지 가능합니다'});
+ const rows=await sql('SELECT username FROM groups WHERE chat_id=$1',[chatId]);
+ const result=await fetchGroupParticipants({chatId,groupUsername:rows[0]?.username,limit:500});
+ for(const user of result.users)await remember({id:chatId},{id:user.user_id,first_name:user.first_name,last_name:user.last_name,username:user.username});
+ res.json({ok:true,imported:result.users.length,partial:result.partial,limit:result.limit});
+}catch(e){next(e)}});
 app.get('/api/groups/:id/admins',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const admins=await tg('getChatAdministrators',{chat_id:id});res.json(admins.map(x=>({user_id:String(x.user.id),first_name:x.user.first_name||'',username:x.user.username||'',status:x.status,can_promote_members:!!x.can_promote_members,can_delete_messages:!!x.can_delete_messages})));}catch(e){next(e)}});
 const rightKeys=['can_manage_chat','can_change_info','can_delete_messages','can_manage_video_chats','can_restrict_members','can_promote_members','can_invite_users','can_pin_messages','can_manage_topics'];
 async function execute(req,res,next,action,params,method,body){try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const result=await tg(method,{chat_id:id,...body});await sql('INSERT INTO audit(operator_id,chat_id,action,target_id,details) VALUES($1,$2,$3,$4,$5)',[req.operator,id,action,params.target||null,JSON.stringify(params)]);res.json({ok:true,result})}catch(e){next(e)}}
