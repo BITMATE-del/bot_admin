@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
-import { reviseDesignRegion, editWholeImage } from './ai-image-design.js';
+import { reviseDesignRegion, editWholeImage, interpretImageRequest } from './ai-image-design.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
@@ -248,7 +248,7 @@ async function handle(update,base){
   if(!msg||msg.chat?.type!=='private')return;
   const chatId=msg.chat.id;
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'이미지 AI 편집 봇\n1. 이미지를 올려줘.\n2. 수정하고 싶은 내용을 자연어로 말해 줘.\n예: 피부 기미를 자연스럽게 없애줘\n예: 옷을 검정색으로 바꿔줘\n예: 100Lv > 200Lv\n3. 수정한 이미지를 파일로 보내줄게.');
+    await send(chatId,'AI 이미지 수정 봇\n1. 사진 전송\n2. 짧은 수정 내용 전송\n예: 기미 / 옷 검정 / 뒤 사람 지워 / 100Lv 200Lv\n3. 수정 이미지 받기');
     return;
   }
   const item=msg.photo?.at(-1)||((msg.document?.mime_type||'').startsWith('image/')?msg.document:null);
@@ -257,18 +257,20 @@ async function handle(update,base){
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now()});
     pending.delete(String(msg.from.id));
-    await send(chatId,'이미지를 받았어. 원하는 수정을 자연스럽게 말해 줘.\n예: 얼굴 기미를 자연스럽게 없애줘\n예: 배경 사람을 지워줘\n예: 100Lv > 200Lv\n\n숫자 교체는 위치를 확인한 뒤 진행하고, 일반 사진 편집은 AI가 바로 처리해.');
+    await send(chatId,'이미지 받았어. 간단하게만 말해도 돼.\n예: 기미\n예: 뒤 사람 삭제\n예: 옷 검정\n예: 100Lv 200Lv');
     return;
   }
   if(!msg.text)return;
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
-  const changes=pairs(msg.text);
+  const compact=msg.text.trim().match(/^([^\s>→]{1,50})\s+([^\s>→]{1,50})$/u);
+  const changes=pairs(msg.text) || (compact && /\d/.test(compact[1]) && /\d/.test(compact[2]) ? [{from:compact[1],to:compact[2]}] : null);
   if(!changes){
-    const instruction=msg.text.trim();
-    if(instruction.length<2||instruction.length>300) {await send(chatId,'수정 내용을 2~300자로 설명해 줘.');return;}
+    const request=msg.text.trim();
+    if(!request.length||request.length>300) {await send(chatId,'수정 내용을 짧게 적어줘. 예: 기미, 뒤 사람 삭제, 옷 검정');return;}
     await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
     try {
+      const instruction=await interpretImageRequest(saved.buf,request);
       const result=await editWholeImage(saved.buf,instruction);
       await sendImage(chatId,result);
     } catch(e) {await send(chatId,'AI 편집 실패: '+String(e.message).slice(0,240));}
