@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
-import { reviseDesignRegion } from './ai-image-design.js';
+import { reviseDesignRegion, editWholeImage } from './ai-image-design.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
@@ -159,8 +159,7 @@ async function replaceText(input,changes){
       overlays.push({input:Buffer.from(svg),left:0,top:0});
     }
   }finally{await worker.terminate();}
-  const mark='<svg xmlns="http://www.w3.org/2000/svg" width="85" height="20"><rect width="85" height="20" rx="3" fill="#071321" fill-opacity=".85"/><text x="42" y="14" fill="#b8c8d9" font-family="Noto Sans CJK KR,sans-serif" font-size="11" text-anchor="middle">편집 이미지</text></svg>';
-  overlays.push({input:Buffer.from(mark),left:Math.max(0,width-90),top:Math.max(0,height-24)});
+  // Leave unrelated pixels untouched; no decorative elements are added.
   const output=await sharp(upright).ensureAlpha().composite(overlays).png().toBuffer();
   const marker=regions.map((r,i)=>'<rect x="'+Math.max(0,r.left)+'" y="'+Math.max(0,r.top)+'" width="'+Math.max(1,r.right-r.left)+'" height="'+Math.max(1,r.bottom-r.top)+'" fill="none" stroke="#fa3b32" stroke-width="3"/><text x="'+Math.max(0,r.left)+'" y="'+Math.max(16,r.top-5)+'" fill="#ffffff" stroke="#000000" stroke-width="3" paint-order="stroke" font-size="16" font-family="sans-serif">수정위치 '+(i+1)+'</text>').join('');
   const previewSvg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'">'+marker+'</svg>';
@@ -179,7 +178,7 @@ async function sendPreview(chatId,buf,id,manualUrl){
 async function sendImage(chatId,buf){
   const form=new FormData();
   form.append('chat_id',String(chatId));
-  form.append('caption','요청한 문구를 수정한 편집 이미지입니다. 원본 거래 증빙으로 사용하지 마세요.');
+  form.append('caption','이미지 수정 완료');
   form.append('document',new Blob([buf],{type:'image/png'}),'edited.png');
   const resp=await fetch('https://api.telegram.org/bot'+token+'/sendDocument',{method:'POST',body:form,signal:AbortSignal.timeout(30000)});
   const json=await resp.json();
@@ -220,8 +219,7 @@ async function manualEdit(buf,{x,y,w,h,after,angle}){
   const fg=lum>140?'#191c20':'#f1f5fa';
   const fontSize=Math.max(5,Math.min(90,Math.round(h*.75),Math.floor((w-4)/Math.max(1,Array.from(after).length)*1.38)));
   const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'"><defs><clipPath id="region"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'"/></clipPath></defs><g clip-path="url(#region)"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="rgb('+bg.join(',')+')"/><g transform="translate('+(x+w/2)+' '+(y+h/2)+') rotate('+angle+')"><text x="0" y="'+(fontSize*.34)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" text-anchor="middle" fill="'+fg+'">'+esc(after)+'</text></g></g></svg>';
-  const mark='<svg xmlns="http://www.w3.org/2000/svg" width="90" height="22"><rect width="90" height="22" rx="3" fill="#08131e" fill-opacity=".88"/><text x="45" y="15" fill="#d2e0ef" font-size="11" font-family="Noto Sans CJK KR,sans-serif" text-anchor="middle">편집 이미지</text></svg>';
-  return sharp(original).composite([{input:Buffer.from(svg),left:0,top:0},{input:Buffer.from(mark),left:Math.max(0,W-95),top:Math.max(0,H-26)}]).png().toBuffer();
+  return sharp(original).composite([{input:Buffer.from(svg),left:0,top:0}]).png().toBuffer();
 }
 async function sendManualLink(chatId,jobId,base){
   const url=editorUrl(jobId);
@@ -241,9 +239,7 @@ async function handle(update,base){
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'확인했어. 수정 이미지를 전송할게.'});
     try {
       const region=job.regions?.[0];
-      const output=(process.env.IMAGE_EDIT_PROVIDER==='openai' && region)
-        ? await reviseDesignRegion(job.buf,{x:Math.max(0,Math.floor(region.left)),y:Math.max(0,Math.floor(region.top)),w:Math.max(4,Math.floor(region.right-region.left)),h:Math.max(4,Math.floor(region.bottom-region.top))},'Revise the selected design number from '+job.change.from+' to '+job.change.to+'. Match original font and perspective without other design changes.')
-        : job.output;
+      const output=region ? await reviseDesignRegion(job.buf,{x:Math.max(0,Math.floor(region.left)),y:Math.max(0,Math.floor(region.top)),w:Math.max(4,Math.floor(region.right-region.left)),h:Math.max(4,Math.floor(region.bottom-region.top))},'Replace '+job.change.from+' with '+job.change.to+'. Match all existing text properties, perspective and texture. Keep other elements untouched.') : await editWholeImage(job.buf,job.instruction);
       await sendImage(job.chatId,output);
     } catch(error) { await send(job.chatId,'AI 편집 실패: '+error.message); }
     return;
@@ -252,7 +248,7 @@ async function handle(update,base){
   if(!msg||msg.chat?.type!=='private')return;
   const chatId=msg.chat.id;
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'🖼 이미지 부분 수정 봇\n\n1. 원본 이미지를 사진 또는 파일로 전송\n2. 변경할 내용을 전송\n   36.05 > 921.42\n3. 수정한 이미지를 파일로 받습니다.\n\n여러 줄을 한 번에 입력할 수도 있습니다.\n인식이 불명확하면 원본 보호를 위해 수정하지 않습니다.\n※ 결과에는 편집 표시가 들어갑니다.');
+    await send(chatId,'이미지 AI 편집 봇\n1. 이미지를 올려줘.\n2. 수정하고 싶은 내용을 자연어로 말해 줘.\n예: 피부 기미를 자연스럽게 없애줘\n예: 옷을 검정색으로 바꿔줘\n예: 100Lv > 200Lv\n3. 수정한 이미지를 파일로 보내줄게.');
     return;
   }
   const item=msg.photo?.at(-1)||((msg.document?.mime_type||'').startsWith('image/')?msg.document:null);
@@ -261,15 +257,24 @@ async function handle(update,base){
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now()});
     pending.delete(String(msg.from.id));
-    await send(chatId,'이미지를 받았어. 바꿀 문구를 보내줘.\n예: 36.05 > 921.42\n또는: 36.05를 921.42로 바꿔줘\n비스듬한 문구도 인식하며, 중복될 때는 첫번째에 있는 30 > 33처럼 입력해 줘.');
+    await send(chatId,'이미지를 받았어. 원하는 수정을 자연스럽게 말해 줘.\n예: 얼굴 기미를 자연스럽게 없애줘\n예: 배경 사람을 지워줘\n예: 100Lv > 200Lv\n\n숫자 교체는 위치를 확인한 뒤 진행하고, 일반 사진 편집은 AI가 바로 처리해.');
     return;
   }
   if(!msg.text)return;
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
   const changes=pairs(msg.text);
-  if(!changes){await send(chatId,'수정할 내용을 이해하지 못했어. 아래 중 편한 방식으로 보내줘.\n\n30 > 33\n30을 33으로 바꿔줘\n첫번째에 있는 30을 33으로 바꿔줘\n\n이미지는 다시 보내지 않아도 돼.');return;}
-  if(changes.length>8)throw new Error('한 번에 8개까지만 수정할 수 있어요.');
+  if(!changes){
+    const instruction=msg.text.trim();
+    if(instruction.length<2||instruction.length>300) {await send(chatId,'수정 내용을 2~300자로 설명해 줘.');return;}
+    await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
+    try {
+      const result=await editWholeImage(saved.buf,instruction);
+      await sendImage(chatId,result);
+    } catch(e) {await send(chatId,'AI 편집 실패: '+String(e.message).slice(0,240));}
+    return;
+  }
+  if(changes.length>1) {await send(chatId,'현재 정밀 영역 수정은 한 번에 한 곳씩 지원해. 첫 번째 변경부터 진행해 줘.');return;}
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
   const manualId=makeManualJob(chatId,saved.buf,changes[0]);
   try{
@@ -308,9 +313,7 @@ export function mountImageBot(app,base){
     try{
       if(String(req.body?.after||'')!==job.change.to)throw new Error('변경 문구가 처음 입력한 내용과 다릅니다.');
       const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
-      const output=process.env.IMAGE_EDIT_PROVIDER==='openai'
-        ? await reviseDesignRegion(job.buf,values,'Revise the selected design value from '+job.change.from+' to '+job.change.to+'. Match original font, image texture and perspective. Keep all other design elements unchanged.')
-        : await manualEdit(job.buf,{...values,after:job.change.to});
+      const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
       await sendImage(job.chatId,output);
       manualJobs.delete(job.id);
       res.json({ok:true});
