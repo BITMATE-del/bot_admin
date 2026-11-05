@@ -86,13 +86,9 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
   const maskH=Math.max(1,Math.min(1024-maskY,Math.ceil(h*scale)));
   const transparency=Buffer.alloc(1024*1024,255);
   for(let yy=maskY; yy<maskY+maskH; yy++) transparency.fill(0,yy*1024+maskX,yy*1024+maskX+maskW);
-  const mask = await sharp({create:{width:1024,height:1024,channels:4,background:{r:255,g:255,b:255,alpha:255}}})
-    .joinChannel(Buffer.from(transparency),{raw:{width:1024,height:1024,channels:1}})
-    .png().toBuffer().catch(async()=>{
-      const rgba=Buffer.alloc(1024*1024*4,255);
-      for(let i=0;i<transparency.length;i++)rgba[i*4+3]=transparency[i];
-      return sharp(rgba,{raw:{width:1024,height:1024,channels:4}}).png().toBuffer();
-    });
+  const rgba=Buffer.alloc(1024*1024*4,255);
+  for(let i=0;i<transparency.length;i++)rgba[i*4+3]=transparency[i];
+  const mask=await sharp(rgba,{raw:{width:1024,height:1024,channels:4}}).png().toBuffer();
   const generated=await invoke(crop,instruction,mask);
   const fitted=await sharp(generated).resize(1024,1024).extract({left:offsetX,top:offsetY,width:fitW,height:fitH}).resize(cropW,cropH).png().toBuffer();
   const patch=await sharp(fitted).extract({left:x-cropLeft,top:y-cropTop,width:w,height:h}).png().toBuffer();
