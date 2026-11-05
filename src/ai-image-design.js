@@ -104,9 +104,26 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
   const contextualPatch=await sharp(generatedAt1024)
     .extract({left:offsetX,top:offsetY,width:fitW,height:fitH}).png().toBuffer();
   const fitted=await sharp(contextualPatch).resize(cropW,cropH,{fit:'fill'}).png().toBuffer();
-  const patch=await sharp(fitted).extract({left:x-cropLeft,top:y-cropTop,width:w,height:h}).png().toBuffer();
-  // Only selected pixels are replaced. All remaining pixels are byte-identical in RGBA space.
-  return sharp(upright).composite([{input:patch,left:x,top:y}]).png().toBuffer();
+  const patch=await sharp(fitted)
+    .extract({left:x-cropLeft,top:y-cropTop,width:w,height:h})
+    .ensureAlpha().raw().toBuffer({resolveWithObject:true});
+  // Blend only along the inside edge to avoid a rectangular seam while preserving
+  // every pixel outside the selected region. Scale feather for small selections.
+  const fade=Math.max(0,Math.min(6,Math.floor(Math.min(w,h)/10)));
+  const bytes=patch.data;
+  const channels=patch.info.channels;
+  for(let py=0;py<h;py++){
+    for(let px=0;px<w;px++){
+      const border=Math.min(px,py,w-1-px,h-1-py);
+      const opacity=fade ? Math.min(1,(border+0.5)/fade) : 1;
+      const alphaOffset=(py*w+px)*channels+3;
+      bytes[alphaOffset]=Math.round(bytes[alphaOffset]*opacity);
+    }
+  }
+  const blendedPatch=await sharp(bytes,{raw:{width:w,height:h,channels}})
+    .png().toBuffer();
+  // Compositing never modifies image pixels outside the selected rectangle.
+  return sharp(upright).composite([{input:blendedPatch,left:x,top:y}]).png().toBuffer();
 }
 
 
