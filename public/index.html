@@ -6,8 +6,22 @@
 <div class="wrap">
 <header class="top"><div><div class="brand">🛡 그룹 비상 관리자</div><div class="muted">Telegram 통합 관리 센터</div></div><button id="logout" class="secondary hidden">로그아웃</button></header>
 <section id="login" class="panel login"><h1>관리자 로그인</h1><p class="muted">관리자 비밀번호만 입력하면 됩니다. 로그인 상태는 이 브라우저에서 최대 30일간 유지됩니다.</p><label class="field">관리자 비밀번호<input id="password" type="password" autocomplete="current-password" placeholder="관리자 비밀번호"></label><button id="loginButton" class="primary" style="width:100%">로그인</button><p class="hint">다른 사람에게 비밀번호를 공유하지 마세요. 관리자 임명 등 그룹 운영 권한에 접근할 수 있습니다.</p></section>
-<div id="app" class="layout hidden"><aside class="panel sidebar"><div class="row"><h2 style="margin:0">연결 그룹</h2><button id="reload" class="secondary">새로고침</button></div><div id="groups"></div><p class="hint">그룹에 봇을 관리자 권한으로 추가하면 자동으로 표시됩니다.</p></aside>
-<main class="panel"><div class="row group-head"><div><h2 id="selectedTitle" style="margin-bottom:5px">그룹 선택</h2><div id="groupMeta" class="muted">좌측에서 그룹을 선택하세요.</div></div><button id="refreshRights" class="secondary">권한 확인</button></div>
+<div id="app" class="layout hidden"><aside class="panel sidebar"><div class="row"><h2 style="margin:0">연결 그룹</h2><button id="reload" class="secondary">새로고침</button></div><div id="groups"></div><button id="accessPanelButton" class="secondary hidden" style="width:100%;margin-top:16px">관리 비밀번호 · 그룹 배정</button><p class="hint">그룹에 봇을 관리자 권한으로 추가하면 자동으로 표시됩니다.</p></aside>
+<main class="panel">
+<section id="accessPanel" class="hidden">
+<div class="row"><div><h2>관리 비밀번호 발급</h2><p class="muted">비밀번호 하나에 원하는 그룹 여러 개를 연결할 수 있습니다. 담당자는 배정된 그룹만 볼 수 있어요.</p></div><button id="accessClose" class="secondary">닫기</button></div>
+<div class="panel" style="background:#f8faff;margin:16px 0">
+<label class="field">담당자 구분 이름<input id="accessLabel" maxlength="80" placeholder="예: 야간 관리팀 / A조 담당자"></label>
+<h3>관리할 그룹 선택</h3>
+<div id="accessGroupChecks" class="list" style="padding:12px;max-height:220px"></div>
+<button id="accessSave" class="primary" style="width:100%;margin-top:14px">선택한 그룹으로 비밀번호 발급</button>
+<p class="hint">발급된 비밀번호는 한 번만 표시됩니다. 담당자에게 사이트 주소와 비밀번호만 전달하면 됩니다.</p>
+</div>
+<div id="accessResult" class="status hidden"></div>
+<div class="row" style="margin:18px 0"><h3 style="margin:0">발급된 관리 비밀번호 목록</h3><button id="accessReload" class="secondary">새로고침</button></div>
+<div id="accessList" class="list" style="max-height:450px"></div>
+</section>
+<div id="regularPanel"><div class="row group-head"><div><h2 id="selectedTitle" style="margin-bottom:5px">그룹 선택</h2><div id="groupMeta" class="muted">좌측에서 그룹을 선택하세요.</div></div><button id="refreshRights" class="secondary">권한 확인</button></div>
 <nav class="tabs"><button data-tab="promote" class="active">관리자 부여</button><button data-tab="admins">관리자 목록</button><button data-tab="settings">그룹 설정</button><button data-tab="members">회원 관리</button><button data-tab="emergency">긴급 조치</button><button data-tab="logs">변경 기록</button></nav>
 <section id="promote"><h3>관리자로 임명할 회원 검색</h3><p class="hint">이름, 사용자명(@username), Telegram ID로 검색할 수 있습니다. 기존 수집 회원은 이름·ID로 검색하고, @사용자명은 텔레그램에서 직접 조회할 수 있습니다.</p><label class="field">저장된 회원 검색<input id="search" placeholder="이름 · 사용자명 · Telegram ID"></label>
 <div class="formgrid">
@@ -48,15 +62,77 @@
 <p class="hint">관리자나 소유자는 봇 권한에 따라 제한할 수 없습니다. 대상과 그룹을 확인한 뒤 차단하세요.</p>
 </div></section>
 <section id="emergency" class="hidden"><h3>그룹 긴급 조치</h3><p class="hint">소유자 계정에 문제가 생겼을 때 봇의 기존 관리자 권한으로 가능한 작업만 수행합니다.</p><div class="row" style="justify-content:flex-start"><button id="lock" class="danger">일반 회원 채팅 잠금</button><button id="unlock" class="secondary">채팅 잠금 해제</button></div><label class="field">메시지 ID<input id="messageId" inputmode="numeric" placeholder="메시지 숫자 ID"></label><div class="row" style="justify-content:flex-start"><button id="pin" class="secondary">공지 고정</button><button id="deleteMessage" class="danger">메시지 삭제</button></div><p class="hint">메시지 ID는 Telegram의 메시지 링크 등에서 확인할 수 있습니다.</p><button id="invite" class="secondary">새 초대 링크 발급</button><label class="field">생성된 초대 링크<input id="inviteResult" readonly placeholder="발급 후 표시됩니다"></label></section><section id="logs" class="hidden"><h3>최근 변경 기록</h3><div id="logsList"></div></section>
-<div id="status" class="status hidden" role="status"></div></main></div></div>
+<div id="status" class="status hidden" role="status"></div></div></main></div></div>
 <script>
-const $=id=>document.getElementById(id);let groups=[],group=null,picked=null,activeTab='promote';
+const $=id=>document.getElementById(id);let groups=[],group=null,picked=null,activeTab='promote',currentRole='manager',accessKeys=[];
 const escapeHtml=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function status(m){$('status').textContent=m;$('status').classList.remove('hidden')}
 async function api(url,opts={}){const r=await fetch(url,{credentials:'same-origin',headers:{'content-type':'application/json'},...opts});let v;try{v=await r.json()}catch{v={}}if(!r.ok)throw Error(v.error||'요청 실패 ('+r.status+')');return v}
 async function post(url,body={}){return api(url,{method:'POST',body:JSON.stringify(body)})}
 function switchAuth(ok){$('login').classList.toggle('hidden',ok);$('app').classList.toggle('hidden',!ok);$('logout').classList.toggle('hidden',!ok)}
+async function loadIdentity(){const me=await api('/api/me');currentRole=me.role;$('accessPanelButton').classList.toggle('hidden',currentRole!=='owner');return me}
 function groupPath(suffix=''){if(!group)throw Error('그룹을 선택하세요');return '/api/groups/'+encodeURIComponent(group.chat_id)+suffix}
+function showAccessPanel(show){
+ $('accessPanel').classList.toggle('hidden',!show);
+ $('regularPanel').classList.toggle('hidden',show);
+ if(show){renderAccessGroupChecks();loadAccessKeys().catch(e=>status(e.message))}
+}
+function renderAccessGroupChecks(selected=[]){
+ const box=$('accessGroupChecks');box.innerHTML='';
+ for(const g of groups){
+  const label=document.createElement('label');label.className='member';label.style.cursor='pointer';
+  const check=document.createElement('input');check.type='checkbox';check.value=g.chat_id;check.checked=selected.includes(g.chat_id);check.style.width='18px';
+  label.append(check,document.createTextNode(' '+g.title+' ('+(g.member_count??'?')+'명)'));box.append(label);
+ }
+ if(!groups.length)box.innerHTML='<div class="empty">연결된 그룹이 없습니다.</div>';
+}
+async function loadAccessKeys(){
+ if(currentRole!=='owner')return;
+ accessKeys=await api('/api/access-keys');
+ const box=$('accessList');box.innerHTML='';
+ for(const a of accessKeys){
+  const item=document.createElement('div');item.className='member';item.style.display='block';
+  const names=a.groups.map(id=>groups.find(g=>g.chat_id===id)?.title||id).join(', ');
+  item.innerHTML='<div class="row"><strong>'+escapeHtml(a.label)+'</strong><span class="badge">'+(a.active?'사용 중':'중지됨')+'</span></div><div class="item-sub">'+escapeHtml(names||'그룹 배정 없음')+'</div>';
+  const buttons=document.createElement('div');buttons.className='row';buttons.style.marginTop='10px';buttons.style.justifyContent='flex-start';buttons.style.flexWrap='wrap';
+  function addButton(name,action){const b=document.createElement('button');b.className='secondary';b.textContent=name;b.onclick=()=>action(a);buttons.append(b)}
+  addButton('그룹 수정',async a=>{
+   const name=prompt('담당자 구분 이름',a.label);if(name===null)return;
+   const selection=prompt('관리할 그룹의 번호를 쉼표로 입력하세요.\\n'+groups.map((g,i)=>(i+1)+'. '+g.title).join('\\n'),a.groups.map(id=>groups.findIndex(g=>g.chat_id===id)+1).filter(i=>i>0).join(','));
+   if(selection===null)return;
+   const idx=selection.split(',').map(x=>Number(x.trim())-1),ids=[...new Set(idx.map(i=>groups[i]?.chat_id))];
+   if(ids.some(x=>!x)||!ids.length)throw Error('올바른 그룹 번호를 선택하세요');
+   await api('/api/access-keys/'+a.id,{method:'PUT',body:JSON.stringify({label:name,groups:ids})});await loadAccessKeys();status('그룹 배정이 저장됐습니다.');
+  });
+  addButton('비밀번호 재발급',async a=>{
+   if(!confirm(a.label+'의 기존 비밀번호를 무효화하고 새 비밀번호를 발급할까요?'))return;
+   const result=await post('/api/access-keys/'+a.id+'/rotate');
+   showAccessPassword(result.password,a.label);await loadAccessKeys();
+  });
+  addButton(a.active?'접속 중지':'다시 활성화',async a=>{
+   if(!confirm(a.label+' 접속 상태를 변경할까요?'))return;
+   await post('/api/access-keys/'+a.id+'/toggle',{active:!a.active});await loadAccessKeys();
+  });
+  item.append(buttons);box.append(item);
+ }
+ if(!accessKeys.length)box.innerHTML='<div class="empty">아직 발급된 관리 비밀번호가 없습니다.</div>';
+}
+function showAccessPassword(password,label){
+ const el=$('accessResult');el.classList.remove('hidden');el.innerHTML='<strong>'+escapeHtml(label)+' · 새 비밀번호</strong><div style="margin:10px 0;font-size:17px;font-weight:700;overflow-wrap:anywhere">'+escapeHtml(password)+'</div><p class="hint">이 비밀번호는 다시 조회할 수 없습니다. 지금 복사하여 담당자에게 전달하세요.</p>';
+ const btn=document.createElement('button');btn.className='secondary';btn.textContent='비밀번호 복사';
+ btn.onclick=async()=>{try{await navigator.clipboard.writeText(password);btn.textContent='복사 완료'}catch{btn.textContent='복사 실패 · 위 비밀번호를 직접 복사하세요'}};el.append(btn);
+}
+$('accessPanelButton').onclick=()=>showAccessPanel(true);
+$('accessClose').onclick=()=>showAccessPanel(false);
+$('accessReload').onclick=()=>run(loadAccessKeys);
+$('accessSave').onclick=()=>run(async()=>{
+ const label=$('accessLabel').value.trim(),ids=[...$('accessGroupChecks').querySelectorAll('input:checked')].map(x=>x.value);
+ if(!label)throw Error('담당자 구분 이름을 입력하세요');
+ if(!ids.length)throw Error('관리할 그룹을 선택하세요');
+ const result=await post('/api/access-keys',{label,groups:ids});
+ showAccessPassword(result.password,label);$('accessLabel').value='';
+ renderAccessGroupChecks();await loadAccessKeys();
+});
 async function loadGroups(){groups=await api('/api/groups');$('groups').innerHTML='';for(const g of groups){const b=document.createElement('button');b.className='group'+(group?.chat_id===g.chat_id?' active':'');b.innerHTML='<strong>'+escapeHtml(g.title)+'</strong><small>'+escapeHtml(g.member_count??'인원 미확인')+'명 · 관리자 임명 '+(g.bot_promote?'가능':'권한 없음')+'</small>';b.onclick=()=>selectGroup(g);$('groups').append(b)}if(!groups.length)$('groups').innerHTML='<div class="empty">등록된 그룹이 없습니다.</div>'}
 async function selectGroup(g){group=g;picked=null;pickedManagement=null;$('targetUser').value='';$('manageSelected').textContent='선택한 회원이 없습니다.';$('picked').textContent='선택된 회원 없음';$('verifyResult').textContent='회원을 선택하면 현재 상태를 조회할 수 있습니다.';$('lookupResult').classList.add('hidden');lookupMessage('선택한 그룹에서 @사용자명을 검색해 주세요.');$('selectedTitle').textContent=g.title;$('groupMeta').textContent='그룹 ID '+g.chat_id+' · '+(g.member_count??'인원 미확인')+'명 · 임명권한 '+(g.bot_promote?'있음':'없음');$('newTitle').value=g.title;await loadGroups();await switchTab(activeTab);await refreshAvailableRights()}
 async function members(){if(!group)return;const q=$('search').value;const rows=await api(groupPath('/members?q='+encodeURIComponent(q)));$('searchCount').textContent=rows.length+'명 조회 (최대 100명)';$('memberResults').innerHTML='';for(const m of rows){const name=[m.first_name,m.last_name].filter(Boolean).join(' ')||m.username||'이름 없음';const b=document.createElement('button');b.className='member'+(picked?.user_id===m.user_id?' selected':'');b.innerHTML='<div class="avatar">'+escapeHtml(name.slice(0,1))+'</div><div><div class="item-title">'+escapeHtml(name)+'</div><div class="item-sub">'+escapeHtml(m.username?'@'+m.username+' · ':'')+'ID '+escapeHtml(m.user_id)+'</div></div>';b.onclick=()=>{picked=m;$('picked').textContent='선택됨: '+name+' · '+m.user_id;$('targetUser').value=m.user_id;members().catch(e=>status(e.message))};$('memberResults').append(b)}if(!rows.length)$('memberResults').innerHTML='<div class="empty">검색 가능한 회원이 없습니다. 그룹에서 활동한 회원부터 저장됩니다.</div>'}
@@ -101,7 +177,7 @@ async function searchManageMembers(){
 }
 async function switchTab(tab){activeTab=tab;document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));for(const t of ['promote','admins','settings','members','emergency','logs'])$(t).classList.toggle('hidden',t!==tab);if(!group)return;if(tab==='promote')await members();if(tab==='members'){await loadRecentChats();await searchManageMembers()}if(tab==='admins'){const a=await api(groupPath('/admins'));$('adminsList').innerHTML=a.map(x=>'<div class="member"><div class="avatar">★</div><div><div class="item-title">'+escapeHtml(x.first_name)+'</div><div class="item-sub">@'+escapeHtml(x.username||'없음')+' · ID '+escapeHtml(x.user_id)+' · '+escapeHtml(x.status)+'</div></div></div>').join('')||'<div class="empty">관리자 정보 없음</div>'}if(tab==='logs'){const a=await api(groupPath('/audit'));$('logsList').innerHTML=a.map(x=>'<div class="log"><b>'+escapeHtml(x.action)+'</b> · '+escapeHtml(x.target_id||'-')+'<div class="muted">'+escapeHtml(x.created_at)+' · 운영자 '+escapeHtml(x.operator_id)+'</div></div>').join('')||'<div class="empty">아직 기록이 없습니다.</div>'}}
 async function run(f){try{await f()}catch(e){status(e.message)}}
-$('loginButton').onclick=()=>run(async()=>{await post('/api/auth/login',{password:$('password').value});switchAuth(true);await loadGroups();await mtprotoStatus()});
+$('loginButton').onclick=()=>run(async()=>{await post('/api/auth/login',{password:$('password').value});switchAuth(true);await loadIdentity();await loadGroups();await mtprotoStatus()});
 $('password').addEventListener('keydown',ev=>{if(ev.key==='Enter')$('loginButton').click()});
 $('logout').onclick=()=>run(async()=>{await post('/api/auth/logout');switchAuth(false)});
 $('reload').onclick=()=>run(loadGroups);
@@ -181,5 +257,5 @@ $('unlock').onclick=()=>run(async()=>{if(!confirm('일반 회원 채팅을 다�
 $('pin').onclick=()=>run(async()=>{await post(groupPath('/pin'),{message_id:$('messageId').value.trim()});status('공지 고정 완료')});
 $('deleteMessage').onclick=()=>run(async()=>{if(!confirm('메시지를 삭제할까요?'))return;await post(groupPath('/delete-message'),{message_id:$('messageId').value.trim()});status('메시지 삭제 완료')});
 $('invite').onclick=()=>run(async()=>{const r=await post(groupPath('/invite'));$('inviteResult').value=r.result?.invite_link||'';status('새 초대 링크 발급 완료')});
-run(async()=>{await api('/api/me');switchAuth(true);await loadGroups();await mtprotoStatus()});
+run(async()=>{await loadIdentity();switchAuth(true);await loadGroups();await mtprotoStatus()});
 </script></body></html>
