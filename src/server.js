@@ -77,7 +77,32 @@ app.post('/api/groups/:id/sync-members',auth,async(req,res,next)=>{try{
 app.get('/api/groups/:id/admins',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const admins=await tg('getChatAdministrators',{chat_id:id});res.json(admins.map(x=>({user_id:String(x.user.id),first_name:x.user.first_name||'',username:x.user.username||'',status:x.status,can_promote_members:!!x.can_promote_members,can_delete_messages:!!x.can_delete_messages})));}catch(e){next(e)}});
 const rightKeys=['can_manage_chat','can_change_info','can_delete_messages','can_manage_video_chats','can_restrict_members','can_promote_members','can_invite_users','can_pin_messages','can_manage_topics'];
 async function execute(req,res,next,action,params,method,body){try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const result=await tg(method,{chat_id:id,...body});await sql('INSERT INTO audit(operator_id,chat_id,action,target_id,details) VALUES($1,$2,$3,$4,$5)',[req.operator,id,action,params.target||null,JSON.stringify(params)]);res.json({ok:true,result})}catch(e){next(e)}}
-app.post('/api/groups/:id/promote',auth,async(req,res,next)=>{const target=positiveId(req.body.user_id);if(!target)return res.status(400).json({error:'유효한 사용자 ID가 아닙니다'});const rights={};for(const k of rightKeys)rights[k]=req.body.rights?.[k]===true;rights.can_manage_chat=true;rights.is_anonymous=false;rights.can_post_stories=false;rights.can_edit_stories=false;rights.can_delete_stories=false;try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const m=await tg('getChatMember',{chat_id:id,user_id:target});if(!['member','administrator','restricted'].includes(m.status)||m.status==='administrator'&&m.can_be_edited===false)return res.status(400).json({error:'대상 회원의 그룹 소속 또는 수정 권한을 확인할 수 없습니다'});if(m.status==='creator')return res.status(400).json({error:'소유자 권한은 변경할 수 없습니다'});await execute(req,res,next,'promote',{target,rights},'promoteChatMember',{user_id:target,...rights})}catch(e){next(e)}});
+app.get('/api/groups/:id/member-status/:userId',auth,async(req,res,next)=>{try{
+ const id=safeId(req.params.id),user=positiveId(req.params.userId);
+ if(!id||!user)return res.sendStatus(400);
+ await assertGroup(id);
+ const m=await tg('getChatMember',{chat_id:id,user_id:user});
+ res.json({user_id:user,status:m.status,is_admin:m.status==='administrator'||m.status==='creator',rights:{can_delete_messages:!!m.can_delete_messages,can_restrict_members:!!m.can_restrict_members,can_invite_users:!!m.can_invite_users,can_promote_members:!!m.can_promote_members,can_change_info:!!m.can_change_info}});
+}catch(e){next(e)}});
+app.post('/api/groups/:id/promote',auth,async(req,res,next)=>{
+ const target=positiveId(req.body.user_id);
+ if(!target)return res.status(400).json({error:'유효한 사용자 ID가 아닙니다'});
+ const rights={};for(const k of rightKeys)rights[k]=req.body.rights?.[k]===true;
+ rights.can_manage_chat=true;rights.is_anonymous=false;rights.can_post_stories=false;rights.can_edit_stories=false;rights.can_delete_stories=false;
+ try{
+  const id=safeId(req.params.id);if(!id)return res.sendStatus(400);
+  await assertGroup(id);
+  const before=await tg('getChatMember',{chat_id:id,user_id:target});
+  if(before.status==='creator')return res.status(400).json({error:'소유자 권한은 변경할 수 없습니다'});
+  if(!['member','administrator','restricted'].includes(before.status)||(before.status==='administrator'&&before.can_be_edited===false))return res.status(400).json({error:'대상 회원의 그룹 소속 또는 수정 권한을 확인할 수 없습니다'});
+  await tg('promoteChatMember',{chat_id:id,user_id:target,...rights});
+  const after=await tg('getChatMember',{chat_id:id,user_id:target});
+  const verified=after.status==='administrator';
+  await sql('INSERT INTO audit(operator_id,chat_id,action,target_id,details) VALUES($1,$2,$3,$4,$5)',[req.operator,id,'promote',target,JSON.stringify({rights,verified,result_status:after.status})]);
+  if(!verified)return res.status(409).json({error:'권한 변경 요청은 수락됐지만 Telegram에서 관리자 상태가 확인되지 않았습니다.',status:after.status});
+  return res.json({ok:true,verified:true,status:after.status,user_id:target,rights:{can_delete_messages:!!after.can_delete_messages,can_restrict_members:!!after.can_restrict_members,can_change_info:!!after.can_change_info,can_invite_users:!!after.can_invite_users}});
+ }catch(e){next(e)}
+});
 app.post('/api/groups/:id/title',auth,(req,res,next)=>{const title=String(req.body.title||'').trim();if(!title||title.length>128)return res.sendStatus(400);execute(req,res,next,'set_title',{title},'setChatTitle',{title})});
 app.post('/api/groups/:id/description',auth,(req,res,next)=>{const description=String(req.body.description||'');if(description.length>255)return res.sendStatus(400);execute(req,res,next,'set_description',{description},'setChatDescription',{description})});
 app.post('/api/groups/:id/ban',auth,(req,res,next)=>{const target=positiveId(req.body.user_id);if(!target)return res.sendStatus(400);execute(req,res,next,'ban',{target},'banChatMember',{user_id:target})});
