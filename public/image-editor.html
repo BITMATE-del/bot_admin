@@ -10,6 +10,13 @@ canvas{display:block;max-width:100%;height:auto;touch-action:none;cursor:crossha
 label{display:block;color:#cad7e8;font-size:13px}input{background:#0a1220;color:#fff;border:1px solid #456077;border-radius:8px;padding:10px;width:100%;font:inherit}
 button{border:0;border-radius:10px;padding:12px 14px;font:inherit;font-weight:650;background:#2d71e8;color:white;cursor:pointer;width:100%}
 button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{min-height:24px;color:#d1e1ff;margin-top:12px}
+.progress-panel{margin-top:14px;padding:12px;border:1px solid #304058;border-radius:10px;background:#0d1728}
+.progress-top{display:flex;justify-content:space-between;gap:12px;color:#e3edfc;font-size:14px;margin-bottom:10px}
+.progress-track{height:10px;border-radius:99px;overflow:hidden;background:#29374f}
+.progress-fill{width:0%;height:100%;background:#4b91f5;border-radius:99px;transition:width .4s ease}
+.progress-details{font-size:13px;color:#aabbd0;margin-top:9px}
+.progress-details span+span:before{content:" · "}
+
 </style></head>
 <body><main><h1>수정할 글자 위치 선택</h1><p class="hint">원본 이미지에서 수정할 숫자를 손가락이나 마우스로 <strong>사각형으로 감싸 줘.</strong> 위치를 직접 선택해야 엉뚱한 글자를 바꾸지 않아.</p>
 <div class="panel"><div class="viewport"><canvas id="image"></canvas></div><div class="fields">
@@ -18,6 +25,11 @@ button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{mi
 </div><label>글자 기울기 (°)<input id="angle" type="number" min="-60" max="60" step="1" value="0"></label>
 <p class="hint" id="selection">이미지에서 수정할 숫자만 드래그하여 선택해 줘.</p>
 <button id="submit" disabled>선택한 영역 수정 후 텔레그램으로 보내기</button><button id="clear" class="secondary" style="margin-top:8px">선택 다시 하기</button>
+<div id="progressPanel" class="progress-panel" hidden aria-live="polite">
+<div class="progress-top"><strong id="progressLabel">준비 중</strong><strong id="progressPercent">0%</strong></div>
+<div class="progress-track" role="progressbar" aria-label="편집 진행 단계" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack"><div class="progress-fill" id="progressFill"></div></div>
+<div class="progress-details"><span id="progressElapsed">경과 0초</span><span id="progressHint">실제 작업 단계 기준이며 남은 시간은 이미지마다 달라요.</span></div>
+</div>
 <div role="status" class="msg" id="status"></div></div>
 </main><script>
 (async()=>{
@@ -36,38 +48,69 @@ canvas.addEventListener('pointermove',e=>{if(!active)return;e.preventDefault();r
 canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();active=false;rect=selection(start,point(e));sub.disabled=!rect||rect.w<4||rect.h<4;sel.textContent=sub.disabled?'숫자 둘레를 더 크게 선택해 줘.':'선택한 위치가 정확한지 확인하고 전송해 줘.';draw()});
 document.getElementById('clear').addEventListener('click',()=>{rect=null;sub.disabled=true;sel.textContent='선택 다시 하기: 숫자를 감싸 줘.';draw()});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const panel=document.getElementById('progressPanel');
+const progressFill=document.getElementById('progressFill');
+const progressLabel=document.getElementById('progressLabel');
+const progressPercent=document.getElementById('progressPercent');
+const progressElapsed=document.getElementById('progressElapsed');
+const progressHint=document.getElementById('progressHint');
+const progressTrack=document.getElementById('progressTrack');
+const renderProgress=(data)=>{
+ panel.hidden=false;
+ const pct=Math.max(0,Math.min(100,Number(data.progress)||0));
+ progressFill.style.width=pct+'%';
+ progressLabel.textContent=data.message||'처리 중';
+ progressPercent.textContent=pct+'%';
+ progressElapsed.textContent='경과 '+(Number(data.elapsedSeconds)||0)+'초';
+ progressTrack.setAttribute('aria-valuenow',String(pct));
+ progressHint.textContent=pct===100?'텔레그램에서 결과를 확인해 줘.':pct===0?'선택 영역을 확인해 줘.':'실제 처리 단계 기준 · AI 처리 시간은 이미지마다 달라요.';
+};
 async function statusPoll(){
-  for(let i=0;i<120;i++){
-    await sleep(2000);
-    try{
-      const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/status',{cache:'no-store'});
-      if(!response.ok){if(response.status===404)throw Error('편집 요청이 만료됐어. 이미지를 다시 보내줘.');continue;}
-      const state=await response.json();
-      if(state.state==='done'){status.textContent='완료! 텔레그램에서 수정한 이미지를 확인해 줘.';return;}
-      if(state.state==='failed')throw Error(state.error||'이미지 수정에 실패했어.');
-      status.textContent='AI가 이미지를 수정하고 있어. 완료되면 텔레그램으로 보내줄게.';
-    }catch(error){
-      if(/실패|만료|API|Invalid|Expired|error|오류/.test(error.message||''))throw error;
-    }
+ let connectionErrors=0;
+ for(let i=0;i<180;i++){
+  await sleep(2000);
+  let response;
+  try{
+   response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/status',{cache:'no-store'});
+  }catch(e){
+   connectionErrors++;
+   status.textContent='상태 확인 연결이 잠시 끊겼어. 다시 확인 중이야.';
+   if(connectionErrors>=8)throw Error('서버 연결을 확인할 수 없어. 텔레그램에서 결과를 확인해 줘.');
+   continue;
   }
-  status.textContent='편집이 길어지고 있어. 텔레그램에서 결과를 확인해 줘.';
+  connectionErrors=0;
+  if(response.status===404)throw Error('편집 요청이 만료됐어. 이미지를 다시 보내줘.');
+  if(!response.ok)continue;
+  const data=await response.json();
+  renderProgress(data);
+  if(data.state==='done'){
+   status.textContent='수정 완료! 텔레그램에서 이미지를 확인해 줘.';
+   return;
+  }
+  if(data.state==='failed')throw Error(data.error||'이미지 수정에 실패했어.');
+  if(data.elapsedSeconds>=60)status.textContent='AI 편집이 계속 진행 중이야. 완료하면 텔레그램으로 전송돼.';
+  else status.textContent='수정 중이야. 결과는 텔레그램으로 전송돼.';
+ }
+ throw Error('작업 상태 확인 시간이 길어졌어. 텔레그램에서 결과를 확인해 줘.');
 }
 sub.addEventListener('click',async()=>{
  if(!rect)return;
  sub.disabled=true;
- status.textContent='편집을 접수하고 있어.';
+ renderProgress({progress:5,message:'편집 요청 접수 중',elapsedSeconds:0});
+ status.textContent='편집 요청을 접수하고 있어.';
  try{
   const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/apply',{
-    method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
+   method:'POST',headers:{'content-type':'application/json'},
+   body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
   });
   const payload=await response.json();
   if(!response.ok)throw Error(payload.error||'접수에 실패했어.');
-  if(payload.state==='done'){status.textContent='완료! 텔레그램을 확인해 줘.';return;}
-  status.textContent='접수 완료. AI가 이미지를 수정하고 있어.';
+  if(payload.state==='done'){renderProgress({progress:100,message:'완료',elapsedSeconds:0});status.textContent='완료! 텔레그램을 확인해 줘.';return;}
+  renderProgress({progress:15,message:'접수 완료 · 이미지 준비 중',elapsedSeconds:0});
+  status.textContent='접수 완료. 작업 상태를 확인하고 있어.';
   await statusPoll();
  }catch(error){
-  status.textContent='오류: '+(error.message==='Failed to fetch'?'서버 연결이 일시적으로 끊겼어. 다시 눌러줘.':error.message);
+  status.textContent='오류: '+(error.message==='Failed to fetch'?'서버 연결이 끊겼어. 텔레그램에서 결과를 확인한 뒤 다시 시도해 줘.':error.message);
   sub.disabled=false;
  }
 });
