@@ -65,5 +65,5 @@ $('unlock').onclick=()=>run(async()=>{if(!confirm('일반 회원 채팅을 다�
 $('pin').onclick=()=>run(async()=>{await post(groupPath('/pin'),{message_id:$('messageId').value.trim()});status('공지 고정 완료')});
 $('deleteMessage').onclick=()=>run(async()=>{if(!confirm('메시지를 삭제할까요?'))return;await post(groupPath('/delete-message'),{message_id:$('messageId').value.trim()});status('메시지 삭제 완료')});
 $('invite').onclick=()=>run(async()=>{const r=await post(groupPath('/invite'));$('inviteResult').value=r.result?.invite_link||'';status('새 초대 링크 발급 완료')});
-run(async()=>{await api('/api/me');switchAuth(true);await loadGroups()});
+run(async()=>{await api('/api/me');switchAuth(true);await loadGroups();await mtprotoStatus()});
 </script></body></html>
