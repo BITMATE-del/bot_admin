@@ -5,7 +5,7 @@
 :root{color-scheme:dark}*{box-sizing:border-box}body{background:#0b1220;color:#f4f7fb;font:15px/1.5 system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;padding:18px}
 main{max-width:760px;margin:auto}.hint{color:#aab9cb}.panel{border:1px solid #304058;background:#141f30;border-radius:14px;padding:14px;margin-top:12px}h1{font-size:20px;margin:6px 0}
 .viewport{overflow:auto;background:#0a0f1a;max-height:70vh;border-radius:9px;touch-action:pan-y}
-.image-stage{position:relative;width:max-content;max-width:100%;margin:auto}#sourceImage{display:block;max-width:100%;height:auto}canvas{display:block;position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+.image-stage{position:relative;width:100%;min-height:220px;max-width:100%;margin:auto}#sourceImage{display:block;width:100%;height:auto;max-height:none;object-fit:contain}canvas{display:block;position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
 .fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
 label{display:block;color:#cad7e8;font-size:13px}input{background:#0a1220;color:#fff;border:1px solid #456077;border-radius:8px;padding:10px;width:100%;font:inherit}
 button{border:0;border-radius:10px;padding:12px 14px;font:inherit;font-weight:650;background:#2d71e8;color:white;cursor:pointer;width:100%}
@@ -118,10 +118,24 @@ try{
  if(!/^[0-9a-f]{32}$/.test(job||''))throw Error('링크가 올바르지 않아.');
  const r=await fetch('/api/image-job/'+job+'/info');if(!r.ok)throw Error('편집 링크가 만료됐어. 봇에서 다시 요청해 줘.');
  const info=await r.json();before.value=info.before;after.value=info.after;
- image.onload=()=>{canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;draw();};
- image.onerror=()=>{status.textContent='이미지를 불러오지 못했어.'};
- document.getElementById('sourceFileLink').href='/api/image-job/'+encodeURIComponent(job)+'/original';
- image.src='/api/image-job/'+job+'/original';
+ const sourcePath='/api/image-job/'+encodeURIComponent(job)+'/original';
+ document.getElementById('sourceFileLink').href=sourcePath;
+ const stage=document.querySelector('.image-stage');
+ const ready=()=> {
+   if(!image.naturalWidth||!image.naturalHeight){status.textContent='원본 이미지 크기를 읽을 수 없어. 원본 이미지 직접 보기에서 확인해 줘.';return;}
+   canvas.width=image.naturalWidth;
+   canvas.height=image.naturalHeight;
+   stage.style.minHeight='0';
+   const container=document.querySelector('.viewport');
+   const available=Math.max(200,Math.min(720,container.clientWidth||720));
+   stage.style.width=Math.min(available,image.naturalWidth)+'px';
+   draw();
+   status.textContent='원본 이미지를 불러왔어. 사진에서 수정할 글자 위치를 선택해 줘.';
+ };
+ image.onload=ready;
+ image.onerror=()=>{stage.style.minHeight='120px';status.textContent='원본 이미지를 불러오지 못했어. 원본 이미지 직접 보기에서 확인해 줘.';};
+ image.src=sourcePath;
+ if(image.complete && image.naturalWidth)ready();
 }catch(e){status.textContent=e.message;}
 })();
 </script></body></html>
