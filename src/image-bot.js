@@ -5,6 +5,7 @@ import { createWorker } from 'tesseract.js';
 const token = process.env.IMAGE_BOT_TOKEN;
 const sessions = new Map();
 const pending = new Map();
+const manualJobs = new Map();
 const MAX_IMAGE = 12 * 1024 * 1024;
 const MAX_SIDE = 5000;
 const ttl = 30 * 60 * 1000;
@@ -163,11 +164,11 @@ async function replaceText(input,changes){
   const preview=await sharp(upright).composite([{input:Buffer.from(previewSvg),left:0,top:0}]).png().toBuffer();
   return {output,preview};
 }
-async function sendPreview(chatId,buf,id){
+async function sendPreview(chatId,buf,id,manualUrl){
   const form=new FormData();
   form.append('chat_id',String(chatId));
   form.append('caption','빨간 사각형이 수정하려는 위치야. 정확할 때만 [위치 확인 · 수정]을 눌러줘. 다른 위치면 취소하고 해당 부분을 확대해서 올려줘.');
-  form.append('reply_markup',JSON.stringify({inline_keyboard:[[{text:'✅ 위치 확인 · 수정',callback_data:'im:ok:'+id},{text:'❌ 취소',callback_data:'im:no:'+id}]]}));
+  form.append('reply_markup',JSON.stringify({inline_keyboard:[[{text:'✅ 위치 확인 · 수정',callback_data:'im:ok:'+id},{text:'❌ 취소',callback_data:'im:no:'+id}],[{text:'✏️ 위치 직접 선택',url:manualUrl}]]}));
   form.append('photo',new Blob([buf],{type:'image/png'}),'preview.png');
   const resp=await fetch('https://api.telegram.org/bot'+token+'/sendPhoto',{method:'POST',body:form,signal:AbortSignal.timeout(30000)});
   const json=await resp.json();if(!json.ok)throw new Error(json.description||'미리보기 전송 실패');
@@ -190,7 +191,41 @@ async function download(fileId){
   if(arr.byteLength>MAX_IMAGE)throw new Error('이미지 크기가 너무 큽니다.');
   return Buffer.from(arr);
 }
-async function handle(update){
+
+function makeManualJob(chatId,buf,change){
+  const id=crypto.randomBytes(16).toString('hex');
+  manualJobs.set(id,{id,chatId,buf,change,created:Date.now(),busy:false});
+  return id;
+}
+async function manualEdit(buf,{x,y,w,h,after,angle}){
+  const original=await sharp(buf).rotate().png().toBuffer();
+  const meta=await sharp(original).metadata(),W=meta.width,H=meta.height;
+  if(!Number.isInteger(x)||!Number.isInteger(y)||!Number.isInteger(w)||!Number.isInteger(h)||x<0||y<0||w<4||h<4||w>W*.8||h>H*.45||x+w>W||y+h>H)
+    throw new Error('수정 영역이 올바르지 않아.');
+  if(typeof after!=='string'||!after.trim()||after.length>70||!Number.isFinite(angle)||Math.abs(angle)>60)throw new Error('입력값을 확인해 줘.');
+  const pixels=await sharp(original).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+  const n=pixels.info.channels;
+  const sample=(px,py)=>{
+    px=Math.max(0,Math.min(W-1,Math.round(px)));
+    py=Math.max(0,Math.min(H-1,Math.round(py)));
+    const idx=(py*W+px)*n;
+    return [pixels.data[idx],pixels.data[idx+1],pixels.data[idx+2]];
+  };
+  const around=[sample(x-2,y+h/2),sample(x+w+2,y+h/2),sample(x+w/2,y-2)];
+  const bg=around.map((_,i)=>Math.round(around.reduce((a,r)=>a+r[i],0)/3));
+  const lum=bg[0]*.299+bg[1]*.587+bg[2]*.114;
+  const fg=lum>140?'#191c20':'#f1f5fa';
+  const fontSize=Math.max(8,Math.min(90,Math.round(h*.91)));
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="rgb('+bg.join(',')+')"/><g transform="translate('+(x+w/2)+' '+(y+h/2)+') rotate('+angle+')"><text x="0" y="'+(fontSize*.34)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,DejaVu Sans,sans-serif" text-anchor="middle" fill="'+fg+'">'+esc(after)+'</text></g></svg>';
+  const mark='<svg xmlns="http://www.w3.org/2000/svg" width="90" height="22"><rect width="90" height="22" rx="3" fill="#08131e" fill-opacity=".88"/><text x="45" y="15" fill="#d2e0ef" font-size="11" font-family="Noto Sans CJK KR,sans-serif" text-anchor="middle">편집 이미지</text></svg>';
+  return sharp(original).composite([{input:Buffer.from(svg),left:0,top:0},{input:Buffer.from(mark),left:Math.max(0,W-95),top:Math.max(0,H-26)}]).png().toBuffer();
+}
+async function sendManualLink(chatId,jobId,base){
+  const url=base+'/image-editor.html?job='+jobId;
+  await tg('sendMessage',{chat_id:chatId,text:'인식 위치가 틀릴 때는 숫자 위치를 직접 선택해 줘. 아래 버튼으로 원본 이미지를 열어 수정할 글자만 사각형으로 선택하면 돼. (30분 유효)',reply_markup:{inline_keyboard:[[{text:'✏️ 수정할 위치 직접 선택',url}]]}});
+}
+
+async function handle(update,base){
   const cb=update.callback_query;
   if(cb?.data?.startsWith('im:')){
     const parts=cb.data.split(':');
@@ -227,14 +262,48 @@ async function handle(update){
   if(!changes){await send(chatId,'수정할 내용을 이해하지 못했어. 아래 중 편한 방식으로 보내줘.\n\n30 > 33\n30을 33으로 바꿔줘\n첫번째에 있는 30을 33으로 바꿔줘\n\n이미지는 다시 보내지 않아도 돼.');return;}
   if(changes.length>8)throw new Error('한 번에 8개까지만 수정할 수 있어요.');
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
-  const {output,preview}=await replaceText(saved.buf,changes);
-  const id=crypto.randomBytes(8).toString('hex');
-  pending.set(String(msg.from.id),{id,chatId,output,created:Date.now()});
-  await sendPreview(chatId,preview,id);
+  const manualId=makeManualJob(chatId,saved.buf,changes[0]);
+  try{
+    const {output,preview}=await replaceText(saved.buf,changes);
+    const id=crypto.randomBytes(8).toString('hex');
+    pending.set(String(msg.from.id),{id,chatId,output,created:Date.now()});
+    await sendPreview(chatId,preview,id,base+'/image-editor.html?job='+manualId);
+  }catch(e){
+    console.warn('OCR preview unavailable; offering manual selection:',e.message);
+    await send(chatId,'자동 위치 인식이 정확하지 않아 직접 선택 모드로 전환했어.');
+    await sendManualLink(chatId,manualId,base);
+  }
 }
 export function mountImageBot(app,base){
   if(!token){console.log('Image bot disabled (IMAGE_BOT_TOKEN absent)');return async()=>{};}
   const secret=crypto.createHash('sha256').update(token+':image-webhook').digest('hex');
+  const getManual=req=>{
+    const job=manualJobs.get(req.params.id);
+    if(!job||Date.now()-job.created>ttl)return null;
+    return job;
+  };
+  app.get('/api/image-job/:id/info',(req,res)=>{
+    const job=getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
+    res.set('Cache-Control','no-store').json({before:job.change.from,after:job.change.to});
+  });
+  app.get('/api/image-job/:id/original',async(req,res)=>{
+    const job=getManual(req);if(!job)return res.sendStatus(404);
+    res.set('Cache-Control','no-store').type('png');
+    try{res.send(await sharp(job.buf).rotate().png().toBuffer());}catch{res.sendStatus(500);}
+  });
+  app.post('/api/image-job/:id/apply',async(req,res)=>{
+    const job=getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
+    if(job.busy)return res.status(409).json({error:'이미 처리 중입니다.'});
+    job.busy=true;
+    try{
+      if(String(req.body?.after||'')!==job.change.to)throw new Error('변경 문구가 처음 입력한 내용과 다릅니다.');
+      const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
+      const output=await manualEdit(job.buf,{...values,after:job.change.to});
+      await sendImage(job.chatId,output);
+      manualJobs.delete(job.id);
+      res.json({ok:true});
+    }catch(e){job.busy=false;console.error('manual image edit:',e.message);res.status(400).json({error:e.message});}
+  });
   const recent=new Map();
   app.post('/telegram/image-webhook',async(req,res)=>{
     const a=Buffer.from(req.get('x-telegram-bot-api-secret-token')||'');
@@ -245,13 +314,13 @@ export function mountImageBot(app,base){
     if(recent.has(id))return res.sendStatus(200);
     recent.set(id,Date.now());
     res.sendStatus(200);
-    handle(req.body).catch(async e=>{
+    handle(req.body,base).catch(async e=>{
       console.error('image bot update failed:',e.message);
       const chatId=req.body?.message?.chat?.id;
       if(chatId)try{await send(chatId,'수정 실패: '+String(e.message).slice(0,200));}catch{}
     });
   });
-  const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);},60000);
+  const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,s] of manualJobs)if(Date.now()-s.created>ttl)manualJobs.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);},60000);
   sweep.unref();
   return async()=>{
     const me=await tg('getMe');
