@@ -75,11 +75,16 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
   const scale = Math.min(1024/cropW,1024/cropH);
   const fitW=Math.max(1,Math.round(cropW*scale)),fitH=Math.max(1,Math.round(cropH*scale));
   const offsetX=Math.floor((1024-fitW)/2),offsetY=Math.floor((1024-fitH)/2);
-  const crop = await sharp(upright).extract({left:cropLeft,top:cropTop,width:cropW,height:cropH})
-    .resize(fitW,fitH).extend({
-      left:offsetX,top:offsetY,right:1024-fitW-offsetX,bottom:1024-fitH-offsetY,
-      background:{r:255,g:255,b:255,alpha:255}
-    }).png().toBuffer();
+  // Materialize stages independently. libvips may otherwise rearrange extract,
+  // resize and extend in a single pipeline, shifting the edit selection.
+  const croppedSource = await sharp(upright)
+    .extract({left:cropLeft,top:cropTop,width:cropW,height:cropH}).png().toBuffer();
+  const scaledSource = await sharp(croppedSource)
+    .resize(fitW,fitH,{fit:'fill'}).png().toBuffer();
+  const crop = await sharp(scaledSource).extend({
+    left:offsetX,top:offsetY,right:1024-fitW-offsetX,bottom:1024-fitH-offsetY,
+    background:{r:255,g:255,b:255,alpha:255}
+  }).png().toBuffer();
   const maskX=Math.max(0,Math.floor((x-cropLeft)*scale)+offsetX);
   const maskY=Math.max(0,Math.floor((y-cropTop)*scale)+offsetY);
   const maskW=Math.max(1,Math.min(1024-maskX,Math.ceil(w*scale)));
