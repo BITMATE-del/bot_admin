@@ -62,6 +62,7 @@
 .plan-complete-action:hover{background:#d9eee1}
 .plan-completed-label{color:#22805d;font-size:11px;font-weight:800;white-space:nowrap}
 .plan-edit-action{background:#edf1f9;color:#455672}
+.plan-settle-action{background:#e9f4fa;color:#246580}
 .plan-note{padding:0 17px 13px;font-size:11px;color:#8995ab;line-height:1.5;border-bottom:1px solid #eef2f8}
 .plan-note strong{color:#647493}
 .plan-empty{border:1px dashed #d7dfed;border-radius:14px;background:#fcfdff;color:#8490a7;padding:48px 18px;text-align:center;font-size:13px}
@@ -279,7 +280,7 @@ $('settlementSearch').oninput=renderSettlementHistory;
 $('settlementMonth').onchange=renderSettlementHistory;
 $('settlementSave').onclick=async()=>{
  const body={work_plan_id:$('settlementPlan').value,settlement_date:$('settlementDate').value,amount:$('settlementAmount').value,note:$('settlementNote').value};
- if(!body.work_plan_id||!body.settlement_date||!/^\\d+$/.test(body.amount)||Number(body.amount)<=0){settlementMessage('작업·정산일·1원 이상의 정산금액을 정확하게 입력해 주세요.');return}
+ if(!body.work_plan_id||!body.settlement_date||!/^\d+$/.test(body.amount)||Number(body.amount)<=0){settlementMessage('작업·정산일·1원 이상의 정산금액을 정확하게 입력해 주세요.');return}
  const button=$('settlementSave');button.disabled=true;button.textContent='저장 중...';
  try{
   await post('/api/settlements',body);
@@ -352,8 +353,9 @@ function renderPlans(){
     '<div><div class="plan-primary">'+quantity+' <span style="font-size:11px;font-weight:500;color:#7d8ca5">명·건</span></div><div class="plan-secondary">'+roomCaption+'</div></div>'+
     '<div><span class="plan-payment-flag'+payClass+'">'+escapeHtml(payText)+'</span><div class="plan-secondary">'+escapeHtml(costRows.join(' / ')||'금액 미입력')+'</div></div>'+
     '<div><span class="plan-state'+stateClass+'"><span class="dot"></span>'+escapeHtml(label)+'</span><div class="plan-progress"><span style="width:'+Number(p.progress_percent||0)+'%"></span></div><div class="plan-secondary">'+Number(p.progress_percent||0)+'% 진행</div></div>'+
-    '<div class="plan-quick">'+(done?'<span class="plan-completed-label">✓ 진행완료</span>':'<button class="plan-complete-action">✓ 완료 처리</button>')+'<button class="plan-edit-action">수정</button></div>';
+    '<div class="plan-quick">'+(done?'<span class="plan-completed-label">✓ 진행완료</span>':'<button class="plan-complete-action">✓ 완료 처리</button>')+'<button class="plan-settle-action">정산</button><button class="plan-edit-action">수정</button></div>';
    row.querySelector('.plan-edit-action').onclick=()=>planEditor(p);
+   row.querySelector('.plan-settle-action').onclick=()=>showSettlementEditor(p.id);
    const completeButton=row.querySelector('.plan-complete-action');
    if(completeButton)completeButton.onclick=async()=>{
     completeButton.disabled=true;completeButton.textContent='저장 중...';
