@@ -61,7 +61,19 @@ async function init(){
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
  );
- CREATE INDEX IF NOT EXISTS work_plans_date_idx ON work_plans(work_date,id);`);
+ CREATE INDEX IF NOT EXISTS work_plans_date_idx ON work_plans(work_date,id);
+ CREATE TABLE IF NOT EXISTS plan_settlements(
+  id BIGSERIAL PRIMARY KEY,
+  work_plan_id BIGINT REFERENCES work_plans(id) ON DELETE SET NULL,
+  client_name TEXT NOT NULL,
+  settlement_date DATE NOT NULL,
+  amount BIGINT NOT NULL CHECK(amount>0 AND amount<=9000000000000),
+  note TEXT NOT NULL DEFAULT '',
+  voided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
+ CREATE INDEX IF NOT EXISTS plan_settlements_date_idx ON plan_settlements(settlement_date DESC,id DESC);
+ CREATE INDEX IF NOT EXISTS plan_settlements_plan_idx ON plan_settlements(work_plan_id);`);
 }
 async function remember(chat,user){if(!chat||!user||user.is_bot)return;await sql(`INSERT INTO members(chat_id,user_id,first_name,last_name,username) VALUES($1,$2,$3,$4,$5) ON CONFLICT(chat_id,user_id) DO UPDATE SET first_name=EXCLUDED.first_name,last_name=EXCLUDED.last_name,username=EXCLUDED.username,last_seen=NOW()`,[chat.id,user.id,user.first_name||'',user.last_name||'',user.username||''])}
 async function captureMessage(msg){
@@ -281,6 +293,35 @@ app.delete('/api/plans/:id',auth,ownerOnly,async(req,res,next)=>{try{
  const rows=await sql('DELETE FROM work_plans WHERE id=$1 RETURNING id',[id]);
  if(!rows.length)return res.status(404).json({error:'일정을 찾을 수 없습니다'});
  res.json({ok:true});
+}catch(e){next(e)}});
+
+app.get('/api/settlements',auth,ownerOnly,async(req,res,next)=>{try{
+ const rows=await sql(`SELECT s.id::text,s.work_plan_id::text,s.client_name,to_char(s.settlement_date,'YYYY-MM-DD') AS settlement_date,
+ s.amount::text,s.note,s.voided_at,s.created_at,
+ p.client_name AS current_plan_client,to_char(p.work_date,'YYYY-MM-DD') AS work_date
+ FROM plan_settlements s LEFT JOIN work_plans p ON p.id=s.work_plan_id
+ ORDER BY s.settlement_date DESC,s.id DESC LIMIT 2000`);
+ res.setHeader('Cache-Control','no-store');res.json(rows);
+}catch(e){next(e)}});
+app.post('/api/settlements',auth,ownerOnly,async(req,res,next)=>{try{
+ const planId=positiveId(req.body.work_plan_id);
+ if(!planId)return res.status(400).json({error:'정산할 작업 일정을 선택해 주세요'});
+ const amount=Number(req.body.amount);
+ if(!Number.isSafeInteger(amount)||amount<=0||amount>9000000000000)return res.status(400).json({error:'정산금액을 1원 이상 정확하게 입력해 주세요'});
+ const date=String(req.body.settlement_date||'').trim();
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||Number.isNaN(Date.parse(date+'T00:00:00Z')))return res.status(400).json({error:'정산일을 확인해 주세요'});
+ const note=String(req.body.note||'').trim().slice(0,600);
+ const rows=await sql(`INSERT INTO plan_settlements(work_plan_id,client_name,settlement_date,amount,note)
+ SELECT id,client_name,$2::date,$3,$4 FROM work_plans WHERE id=$1
+ RETURNING id::text`,[planId,date,amount,note]);
+ if(!rows.length)return res.status(404).json({error:'선택한 작업을 찾을 수 없습니다'});
+ res.json({ok:true,id:rows[0].id});
+}catch(e){next(e)}});
+app.post('/api/settlements/:id/void',auth,ownerOnly,async(req,res,next)=>{try{
+ const id=positiveId(req.params.id);if(!id)return res.sendStatus(400);
+ const rows=await sql('UPDATE plan_settlements SET voided_at=NOW() WHERE id=$1 AND voided_at IS NULL RETURNING id::text',[id]);
+ if(!rows.length)return res.status(404).json({error:'정산 내역을 찾을 수 없거나 이미 취소됐습니다'});
+ res.json({ok:true,id});
 }catch(e){next(e)}});
 app.post('/api/group-connections/reconcile',auth,ownerOnly,async(req,res,next)=>{try{
  if(limited('reconcile:'+requestIp(req),3,60000))return res.status(429).json({error:'잠시 후 다시 조회해 주세요'});
