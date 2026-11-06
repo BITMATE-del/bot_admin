@@ -210,10 +210,9 @@ async function verifyOutputFile(original,edited){
   if(source.equals(output)){
     throw new Error('편집본에 변경된 내용이 없어 전송하지 않았어.');
   }
-  const {data,info}=await sharp(output).stats().then(async ()=>{
-    const result=await sharp(output).resize({width:Math.min(b.width,256),withoutEnlargement:true}).ensureAlpha().raw().toBuffer({resolveWithObject:true});
-    return result;
-  });
+  const {data,info}=await sharp(output)
+    .resize({width:Math.min(b.width,256),withoutEnlargement:true})
+    .ensureAlpha().raw().toBuffer({resolveWithObject:true});
   let alphaMissing=0;
   for(let i=3;i<data.length;i+=info.channels)if(data[i]===0)alphaMissing++;
   if(alphaMissing>info.width*info.height*0.1){
