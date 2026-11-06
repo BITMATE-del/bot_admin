@@ -40,6 +40,28 @@ try{
     assert.equal(meta.width,W);assert.equal(meta.height,H);
   }
   assert.equal(editRequestCount,4,'Each distinct test edit should make one image API request');
+  // Regression: wide and tall images must preserve output dimensions and
+  // never modify pixels outside the selected source-image coordinates.
+  for(const [ww,hh,sel] of [
+    [420,95,{x:190,y:28,w:34,h:21}],
+    [95,420,{x:23,y:175,w:26,h:44}]
+  ]){
+    const fixture=await sharp({create:{width:ww,height:hh,channels:4,background:{r:215,g:225,b:235,alpha:1}}}).png().toBuffer();
+    const out=await reviseDesignRegion(fixture,sel,'Retouch a small graphic detail');
+    const [before,after]=await Promise.all([
+      sharp(fixture).ensureAlpha().raw().toBuffer(),
+      sharp(out).ensureAlpha().raw().toBuffer()
+    ]);
+    let altered=0;
+    for(let yy=0;yy<hh;yy++)for(let xx=0;xx<ww;xx++){
+      const i=(yy*ww+xx)*4;
+      const changed=before[i]!==after[i]||before[i+1]!==after[i+1]||before[i+2]!==after[i+2];
+      const inside=xx>=sel.x&&xx<sel.x+sel.w&&yy>=sel.y&&yy<sel.y+sel.h;
+      assert.ok(inside||!changed,'Edit leaked outside selected coordinates on a rectangular canvas');
+      if(changed)altered++;
+    }
+    assert.ok(altered>0,'Expected a change inside selected coordinates');
+  }
   const flatDark=await sharp({create:{width:1024,height:1024,channels:4,background:{r:2,g:2,b:2,alpha:1}}}).png().toBuffer();
   globalThis.fetch=async()=>new Response(JSON.stringify({data:[{b64_json:flatDark.toString('base64')}]}),{status:200});
   await assert.rejects(
