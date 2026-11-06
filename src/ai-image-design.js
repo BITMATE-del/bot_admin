@@ -97,7 +97,47 @@ export async function editWholeImage(sourceBuffer,instruction) {
   return normalized;
 }
 
-export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
+// Conservative comparison for short labels on near-flat backgrounds.
+// On photographs or textured regions this intentionally returns null rather
+// than guessing whether two different strings share the same typography.
+function assessLabelConsistency(original,edited,w,h){
+  if(w<8||h<8||original.length!==edited.length)return null;
+  const n=w*h, border=[];
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    if(x<2||y<2||x>=w-2||y>=h-2){
+      const i=(y*w+x)*4;
+      border.push([original[i],original[i+1],original[i+2]]);
+    }
+  }
+  const med=a=>{const v=a.sort((x,y)=>x-y);return v[Math.floor(v.length/2)]};
+  const bg=[0,1,2].map(c=>med(border.map(p=>p[c])));
+  const colorDistance=(r,g,b)=>Math.max(Math.abs(r-bg[0]),Math.abs(g-bg[1]),Math.abs(b-bg[2]));
+  let borderVar=0;
+  for(const p of border)borderVar+=colorDistance(...p);
+  if(borderVar/border.length>13)return null;
+  const sample=(bytes)=>{
+    let count=0,sumX=0,sumY=0,sumBrightness=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=(y*w+x)*4;
+      const r=bytes[i],g=bytes[i+1],b=bytes[i+2];
+      if(colorDistance(r,g,b)<32)continue;
+      count++;sumX+=x;sumY+=y;sumBrightness+=(r+g+b)/3;
+    }
+    return count?{count,x:sumX/count,y:sumY/count,brightness:sumBrightness/count}:null;
+  };
+  const a=sample(original),b=sample(edited);
+  if(!a||a.count<n*.012||a.count>n*.4)return null;
+  if(!b)return '편집 영역에서 글자 형태가 사라졌어.';
+  const density=b.count/a.count;
+  if(density<.45||density>2.2)return '수정본 글자의 전체 획 밀도가 원본과 크게 달라.';
+  if(Math.abs(a.brightness-b.brightness)>38)return '수정본 글자 색상 명도가 원본과 크게 달라.';
+  if(Math.abs(a.y-b.y)>Math.max(3,h*.18)||Math.abs(a.x-b.x)>Math.max(4,w*.17)){
+    return '수정본 글자의 기준 위치가 원본과 크게 달라.';
+  }
+  return null;
+}
+
+export async function reviseDesignRegion(sourceBuffer,selection,instruction,attempt=0) {
   const {upright,width:W,height:H} = await check(sourceBuffer);
   const {x,y,w,h} = selection;
   if (![x,y,w,h].every(Number.isInteger) || x<0 || y<0 || w<4 || h<4 || x+w>W || y+h>H) {
@@ -194,6 +234,17 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
   // source images can incorrectly pass the old sourceDark threshold.
   if(outputDark/pixelCount>.82 && variance<350){
     throw new Error('AI 결과가 검은 단색 영역으로 출력되어 전송을 중단했어. 원본을 유지하고 다시 시도해 줘.');
+  }
+  const labelOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
+    .ensureAlpha().raw().toBuffer();
+  const mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
+  if(mismatch){
+    if(attempt===0){
+      console.warn('image label quality retry:',mismatch);
+      return reviseDesignRegion(sourceBuffer,selection,
+        instruction+' Ensure design label legibility and retain the same baseline, scale, color and stroke weight as the source label.',1);
+    }
+    throw new Error('텍스트 스타일 검수 실패: '+mismatch+' 원본은 유지했어.');
   }
   // Avoid reporting a visually unchanged region as a successful edit.
   const selectedOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
