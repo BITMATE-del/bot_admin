@@ -198,7 +198,30 @@ async function sendImage(chatId,buf){
   const json=await resp.json();
   if(!json.ok)throw new Error(json.description||'이미지 전송 실패');
 }
+async function verifyOutputFile(original,edited){
+  const [source,output]=await Promise.all([
+    sharp(original).rotate().png().toBuffer(),
+    sharp(edited).png().toBuffer()
+  ]);
+  const [a,b]=await Promise.all([sharp(source).metadata(),sharp(output).metadata()]);
+  if(!b.width||!b.height||a.width!==b.width||a.height!==b.height){
+    throw new Error('편집본 해상도가 원본과 달라 전송하지 않았어.');
+  }
+  if(source.equals(output)){
+    throw new Error('편집본에 변경된 내용이 없어 전송하지 않았어.');
+  }
+  const {data,info}=await sharp(output).stats().then(async ()=>{
+    const result=await sharp(output).resize({width:Math.min(b.width,256),withoutEnlargement:true}).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+    return result;
+  });
+  let alphaMissing=0;
+  for(let i=3;i<data.length;i+=info.channels)if(data[i]===0)alphaMissing++;
+  if(alphaMissing>info.width*info.height*0.1){
+    throw new Error('편집본에 비정상적인 투명 영역이 있어 전송하지 않았어.');
+  }
+}
 async function sendOriginalAndEdit(chatId,original,edited){
+  await verifyOutputFile(original,edited);
   const form=new FormData();
   form.append('chat_id',String(chatId));
   form.append('media',JSON.stringify([
