@@ -91,6 +91,20 @@ function pointToOriginal(x,y,angle,ow,oh,rw,rh){
   // Inverse of the clockwise OCR canvas rotation, not a second forward rotation.
   return {x:c*dx+s*dy+ow/2,y:-s*dx+c*dy+oh/2};
 }
+function originalOCRBounds(found,width,height){
+  // OCR boxes are measured in the rotated image. Convert every corner
+  // into source coordinates before using a rectangle for preview or editing.
+  const corners=[
+    [found.x0,found.y0],[found.x1,found.y0],
+    [found.x0,found.y1],[found.x1,found.y1]
+  ].map(([x,y])=>pointToOriginal(x,y,found.angle,width,height,found.rw,found.rh));
+  const left=Math.max(0,Math.floor(Math.min(...corners.map(p=>p.x))-4));
+  const top=Math.max(0,Math.floor(Math.min(...corners.map(p=>p.y))-4));
+  const right=Math.min(width,Math.ceil(Math.max(...corners.map(p=>p.x))+4));
+  const bottom=Math.min(height,Math.ceil(Math.max(...corners.map(p=>p.y))+4));
+  if(right-left<4||bottom-top<4)throw new Error('자동 선택 영역의 좌표가 올바르지 않아 직접 위치를 선택해 줘.');
+  return {left,top,right,bottom};
+}
 async function locate(worker, baseBuffer, scale, width,height, target){
   const variants=[0,-12,12,-25,25,-40,40];
   const found=[];
@@ -154,12 +168,9 @@ async function replaceText(input,changes){
     for(const change of changes){
       const target=parseTarget(change.from);
       const found=await locate(worker,enlarged,scale,width,height,target);
-      const padding=2;
-      const rw=found.x1-found.x0+padding*2,rh=found.y1-found.y0+padding*2;
-      const cx=found.cx,cy=found.cy;
+      const region=originalOCRBounds(found,width,height);
+      const rw=region.right-region.left,rh=region.bottom-region.top;
       const pos=found.position;
-      const px=Math.round(pos.x),py=Math.round(pos.y);
-      const region={left:px-rw/2-4,right:px+rw/2+4,top:py-rh/2-4,bottom:py+rh/2+4};
       if(regions.some(r=>region.left<r.right&&region.right>r.left&&region.top<r.bottom&&region.bottom>r.top))throw new Error('수정할 문구 영역이 겹칩니다.');
       regions.push(region);
       const rgb=sample(pos.x,pos.y-Math.max(4,rh));
