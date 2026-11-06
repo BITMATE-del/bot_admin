@@ -7,6 +7,13 @@ const MODEL = () => {
   return ALLOWED.has(configured) ? configured : 'gpt-image-2.5-sunburst';
 };
 const MAX_SIDE = 5000;
+// A predictable API budget is more important than silently retrying failed edits.
+// These limits are per running process and reset on restart.
+const MAX_CALLS_PER_HOUR = Math.max(1,Number.parseInt(process.env.IMAGE_API_HOURLY_LIMIT||'12',10)||12);
+const MAX_SIMULTANEOUS = Math.max(1,Number.parseInt(process.env.IMAGE_API_CONCURRENCY||'2',10)||2);
+const recentCalls = [];
+let activeCalls = 0;
+
 const check = async bytes => {
   const upright = await sharp(bytes,{limitInputPixels:30000000}).rotate().png().toBuffer();
   const {width,height} = await sharp(upright).metadata();
@@ -26,6 +33,13 @@ const promptFor = instruction => [
 
 async function invoke(input,instruction,mask) {
   if (!process.env.OPENAI_API_KEY) throw new Error('Railway에 OPENAI_API_KEY가 등록되지 않았습니다.');
+  const now=Date.now();
+  while(recentCalls.length && recentCalls[0]<now-3600000)recentCalls.shift();
+  if(recentCalls.length>=MAX_CALLS_PER_HOUR)throw new Error('시간당 이미지 API 호출 한도에 도달해 추가 과금을 방지했어. 잠시 후 다시 요청해 줘.');
+  if(activeCalls>=MAX_SIMULTANEOUS)throw new Error('이미지 편집 요청이 동시에 진행 중이야. 중복 과금을 막기 위해 추가 요청을 받지 않았어.');
+  recentCalls.push(now);
+  activeCalls++;
+  try {
   const form = new FormData();
   form.append('model',MODEL());
   form.append('image',new Blob([input],{type:'image/png'}),'original.png');
@@ -53,6 +67,7 @@ async function invoke(input,instruction,mask) {
     if (err.name==='AbortError') throw new Error('AI 편집 요청이 시간 초과되었습니다.');
     throw err;
   } finally {clearTimeout(timer);}
+  } finally {activeCalls--;}
 }
 
 export async function editWholeImage(sourceBuffer,instruction) {
