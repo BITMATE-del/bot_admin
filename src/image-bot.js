@@ -198,6 +198,22 @@ async function sendImage(chatId,buf){
   const json=await resp.json();
   if(!json.ok)throw new Error(json.description||'이미지 전송 실패');
 }
+async function sendOriginalAndEdit(chatId,original,edited){
+  const form=new FormData();
+  form.append('chat_id',String(chatId));
+  form.append('media',JSON.stringify([
+    {type:'document',media:'attach://source',caption:'원본'},
+    {type:'document',media:'attach://revision',caption:'편집본 (수정된 이미지)'}
+  ]));
+  const normalized=await sharp(original).rotate().png().toBuffer();
+  form.append('source',new Blob([normalized],{type:'image/png'}),'original.png');
+  form.append('revision',new Blob([edited],{type:'image/png'}),'edited.png');
+  const response=await fetch('https://api.telegram.org/bot'+token+'/sendMediaGroup',{
+    method:'POST',body:form,signal:AbortSignal.timeout(45000)
+  });
+  const result=await response.json();
+  if(!result.ok)throw new Error(result.description||'원본과 편집본 전송 실패');
+}
 async function download(fileId){
   const file=await tg('getFile',{file_id:fileId});
   if((file.file_size||0)>MAX_IMAGE)throw new Error('12MB 이하 이미지를 올려주세요.');
@@ -254,7 +270,7 @@ async function handle(update,base){
     try {
       const region=job.regions?.[0];
       const output=region ? await reviseDesignRegion(job.buf,{x:Math.max(0,Math.floor(region.left)),y:Math.max(0,Math.floor(region.top)),w:Math.max(4,Math.floor(region.right-region.left)),h:Math.max(4,Math.floor(region.bottom-region.top))},'Replace '+job.change.from+' with '+job.change.to+'. Match all existing text properties, perspective and texture. Keep other elements untouched.') : await editWholeImage(job.buf,job.instruction);
-      await sendImage(job.chatId,output);
+      await sendOriginalAndEdit(job.chatId,job.buf,output);
     } catch(error) { await send(job.chatId,'AI 편집 실패: '+error.message); }
     return;
   }
@@ -286,7 +302,7 @@ async function handle(update,base){
     try {
       const instruction=await interpretImageRequest(saved.buf,request);
       const result=await editWholeImage(saved.buf,instruction);
-      await sendImage(chatId,result);
+      await sendOriginalAndEdit(chatId,saved.buf,result);
     } catch(e) {await send(chatId,'AI 편집 실패: '+String(e.message).slice(0,240));}
     return;
   }
@@ -380,7 +396,7 @@ export function mountImageBot(app,base){
         job.state='editing';
         const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
         job.state='sending';
-        await sendImage(job.chatId,output);
+        await sendOriginalAndEdit(job.chatId,job.buf,output);
         job.state='done';
         if(job.startedAt){
           const secs=Math.max(1,Math.round((Date.now()-job.startedAt)/1000));
