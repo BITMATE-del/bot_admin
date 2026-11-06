@@ -78,9 +78,9 @@
 <div id="planStats" class="plan-kpis"></div>
 <div class="plan-toolbar">
 <label class="field">빠른 검색<input id="planSearch" placeholder="클라이언트 · 진행방 · 메모 검색"></label>
-<label class="field">진행 상태<select id="planFilter"><option value="">전체 상태</option><option>예정</option><option>준비중</option><option>진행중</option><option>작업완료</option><option>보류</option><option>취소</option></select></label>
-</div>
+<label class="field">진행 상태<select id="planFilter"><option value="">전체 상태</option><option>예정</option><option>준비중</option><option>진행중</option><option value="작업완료">진행완료</option><option>보류</option><option>취소</option></select></label>
 <button id="planReload" class="secondary">↻ 새로고침</button>
+</div>
 <section id="planEditor" class="hidden panel" style="background:#f8faff;margin-bottom:18px">
 <div class="row"><h3 id="planEditorTitle">작업 일정 등록</h3><button id="planEditorClose" class="secondary">닫기</button></div>
 <div class="formgrid">
@@ -238,7 +238,7 @@ function renderPlans(){
    const quantity=Number(p.quantity||0).toLocaleString('ko-KR');
    const numRooms=Number(p.room_count||0);
    const extra=p.room_name?' · '+escapeHtml(p.room_name):'';
-   const roomCaption=numRooms?numRooms+'개 방'+extra:(p.room_name?escapeHtml(p.room_name):'방 정보 미입력');
+   const roomCaption=(numRooms?numRooms+'개 방'+extra:(p.room_name?escapeHtml(p.room_name):'방 정보 미입력'))+(Number(p.room_members||0)?' · '+Number(p.room_members).toLocaleString('ko-KR')+'명 참여':'');
    const costRows=[];
    if(p.payment_amount!==null)costRows.push('결제 '+planMoney(p.payment_amount));
    if(p.escrow_amount!==null)costRows.push('에스크로 '+planMoney(p.escrow_amount));
@@ -252,7 +252,6 @@ function renderPlans(){
    row.querySelector('.plan-edit-action').onclick=()=>planEditor(p);
    const completeButton=row.querySelector('.plan-complete-action');
    if(completeButton)completeButton.onclick=async()=>{
-    if(!confirm(p.client_name+' · '+planSafeDate(p.work_date)+' 작업을 진행완료로 처리할까요?'))return;
     completeButton.disabled=true;completeButton.textContent='저장 중...';
     try{
      await post('/api/plans/'+encodeURIComponent(p.id)+'/complete');
