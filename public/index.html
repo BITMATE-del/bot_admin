@@ -172,6 +172,8 @@ function groupPath(suffix=''){if(!group)throw Error('그룹을 선택하세요')
 const planFields={client_name:'planClient',work_date:'planDate',task_type:'planType',quantity:'planQuantity',room_count:'planRoomCount',room_members:'planRoomMembers',room_name:'planRoomName',payment_amount:'planPaymentAmount',escrow_amount:'planEscrowAmount',account_cost:'planAccountCost',work_status:'planWorkStatus',payment_status:'planPaymentStatus',progress_percent:'planProgress',progress_data:'planProgressData',note:'planNote'};
 function showPlanPanel(show){
  if(currentRole!=='owner')return;
+ document.querySelector('.wrap').classList.toggle('planner-mode',show);
+ document.querySelector('.layout').classList.toggle('planner-layout',show);
  $('plansPanel').classList.toggle('hidden',!show);
  $('accessPanel').classList.add('hidden');
  $('regularPanel').classList.toggle('hidden',show);
@@ -201,29 +203,75 @@ async function loadPlans(){
  planRows=await api('/api/plans');
  renderPlans();
 }
+
 function renderPlans(){
- const q=$('planSearch').value.trim().toLowerCase(),status=$('planFilter').value;
- const rows=planRows.filter(p=>(!status||p.work_status===status)&&(!q||[p.client_name,p.room_name,p.note,p.progress_data,p.task_type].join(' ').toLowerCase().includes(q)));
- const total=rows.length,done=rows.filter(x=>x.work_status==='작업완료').length,volume=rows.reduce((n,x)=>n+Number(x.quantity||0),0);
- $('planStats').innerHTML='<div class="panel" style="padding:14px"><div class="muted">전체 일정</div><div style="font-size:24px;font-weight:800">'+total+'건</div></div><div class="panel" style="padding:14px"><div class="muted">완료 / 진행 수량</div><div style="font-size:20px;font-weight:800">'+done+'건 / '+volume.toLocaleString('ko-KR')+'</div></div>';
- const holder=$('planDays');holder.innerHTML='';
- const dayMap=new Map();
- for(const p of rows){if(!dayMap.has(p.work_date))dayMap.set(p.work_date,[]);dayMap.get(p.work_date).push(p)}
- for(const [date,items] of dayMap){
-  const sec=document.createElement('section');sec.style.margin='22px 0';
-  const head=document.createElement('div');head.className='row';head.innerHTML='<h3 style="font-size:17px;margin:0">'+escapeHtml(planSafeDate(date))+'</h3><span class="badge">'+items.length+'건</span>';sec.append(head);
-  for(const p of items){
-   const item=document.createElement('div');item.className='panel';item.style.cssText='padding:16px;margin:10px 0;box-shadow:none';
-   const done=p.work_status==='작업완료',colour=done?'#23855c':p.work_status==='진행중'?'#3d63d4':'#697990';
-   item.innerHTML='<div class="row" style="flex-wrap:wrap"><div style="min-width:0"><strong style="font-size:16px">'+escapeHtml(p.client_name)+'</strong> <span class="badge">'+escapeHtml(p.task_type)+'</span><div class="muted" style="margin-top:6px">'+Number(p.quantity||0).toLocaleString('ko-KR')+'명·건 / '+p.room_count+'방'+(p.room_name?' · '+escapeHtml(p.room_name):'')+'</div></div><div class="row"><span class="badge" style="color:'+colour+'">'+escapeHtml(p.work_status)+'</span><button class="secondary planEditButton">수정</button></div></div>'+
-   '<div class="formgrid" style="margin-top:12px;font-size:13px"><div>진행방 인원 <strong>'+Number(p.room_members||0).toLocaleString('ko-KR')+'명</strong></div><div>결제 상태 <strong>'+escapeHtml(p.payment_status)+'</strong></div><div>결제금액 <strong>'+escapeHtml(planMoney(p.payment_amount))+'</strong></div><div>에스크로 <strong>'+escapeHtml(planMoney(p.escrow_amount))+'</strong></div><div>계정값 <strong>'+escapeHtml(planMoney(p.account_cost))+'</strong></div><div>진행도 <strong>'+p.progress_percent+'%</strong></div></div>'+
-   '<div style="height:6px;background:#e8ecf4;border-radius:8px;overflow:hidden;margin-top:12px"><div style="height:100%;width:'+p.progress_percent+'%;background:'+colour+'"></div></div>'+
-   (p.progress_data?'<div class="item-sub" style="white-space:pre-wrap;margin-top:10px">진행 데이터: '+escapeHtml(p.progress_data)+'</div>':'')+
-   (p.note?'<div class="item-sub" style="white-space:pre-wrap;margin-top:6px">메모: '+escapeHtml(p.note)+'</div>':'');
-   item.querySelector('.planEditButton').onclick=()=>planEditor(p);sec.append(item);
-  }holder.append(sec);
+ const query=$('planSearch').value.trim().toLowerCase(),selectedStatus=$('planFilter').value;
+ const rows=planRows.filter(p=>(!selectedStatus||p.work_status===selectedStatus)&&(!query||[p.client_name,p.room_name,p.note,p.progress_data,p.task_type].join(' ').toLowerCase().includes(query)));
+ const all=planRows.length,done=planRows.filter(p=>p.work_status==='작업완료').length,unfinished=all-done;
+ const pending=planRows.filter(p=>['결제대기','미결제'].includes(p.payment_status)).length;
+ const volume=planRows.reduce((n,p)=>n+Number(p.quantity||0),0);
+ const kpis=[['총 작업 일정',all,'등록된 전체 일정',''],['진행 대기·중',unfinished,'완료 전 작업',''],['진행완료',done,'완료율 '+(all?Math.round(done/all*100):0)+'%','kpi-done'],['결제 확인 필요',pending,'미결제 · 결제 대기','kpi-alert']];
+ $('planStats').innerHTML=kpis.map(k=>'<div class="plan-kpi '+k[3]+'"><div class="kpi-label">'+escapeHtml(k[0])+'</div><div class="kpi-value">'+Number(k[1]).toLocaleString('ko-KR')+'</div><div class="kpi-suffix">'+escapeHtml(k[2])+'</div></div>').join('');
+ const holder=$('planDays');holder.replaceChildren();
+ const byDay=new Map();
+ for(const p of rows){if(!byDay.has(p.work_date))byDay.set(p.work_date,[]);byDay.get(p.work_date).push(p)}
+ for(const [date,items] of byDay){
+  const completed=items.filter(p=>p.work_status==='작업완료').length;
+  const dailyQty=items.reduce((n,p)=>n+Number(p.quantity||0),0);
+  const sec=document.createElement('section');sec.className='plan-day';
+  const header=document.createElement('div');header.className='plan-day-head';
+  header.innerHTML='<div><div class="plan-day-title">'+escapeHtml(planSafeDate(date))+'</div><div class="plan-day-meta">총 '+items.length+'건 · 진행량 '+dailyQty.toLocaleString('ko-KR')+'명·건</div></div><span class="badge">'+completed+'/'+items.length+'건 완료</span>';
+  sec.append(header);
+  const bar=document.createElement('div');bar.className='plan-day-bar';
+  bar.innerHTML='<span style="width:'+(items.length?Math.round(completed/items.length*100):0)+'%"></span>';sec.append(bar);
+  const cols=document.createElement('div');cols.className='plan-cols';
+  cols.innerHTML='<div>클라이언트 / 작업</div><div>진행 수량 · 방</div><div>결제 현황</div><div>진행 상태</div><div style="text-align:right">빠른 관리</div>';
+  sec.append(cols);
+  // Pending work is surfaced first, with completed work retained in the same date.
+  const sorted=[...items].sort((a,b)=>Number(a.work_status==='작업완료')-Number(b.work_status==='작업완료'));
+  for(const p of sorted){
+   const done=p.work_status==='작업완료';
+   const payText=p.payment_status==='미확인'?'결제 미확인':p.payment_status;
+   const payClass=['미결제','결제대기'].includes(p.payment_status)?' pending':['결제완료','선입금완료'].includes(p.payment_status)?' paid':'';
+   const label=done?'진행완료':p.work_status;
+   const stateClass=done?' complete':p.work_status==='진행중'?' active':'';
+   const quantity=Number(p.quantity||0).toLocaleString('ko-KR');
+   const numRooms=Number(p.room_count||0);
+   const extra=p.room_name?' · '+escapeHtml(p.room_name):'';
+   const roomCaption=numRooms?numRooms+'개 방'+extra:(p.room_name?escapeHtml(p.room_name):'방 정보 미입력');
+   const costRows=[];
+   if(p.payment_amount!==null)costRows.push('결제 '+planMoney(p.payment_amount));
+   if(p.escrow_amount!==null)costRows.push('에스크로 '+planMoney(p.escrow_amount));
+   if(p.account_cost!==null)costRows.push('계정값 '+planMoney(p.account_cost));
+   const row=document.createElement('div');row.className='plan-entry'+(done?' is-complete':'');
+   row.innerHTML='<div><div class="plan-client">'+escapeHtml(p.client_name)+'</div><div class="plan-secondary">'+escapeHtml(p.task_type==='일반'?'일반 작업':p.task_type)+'</div></div>'+
+    '<div><div class="plan-primary">'+quantity+' <span style="font-size:11px;font-weight:500;color:#7d8ca5">명·건</span></div><div class="plan-secondary">'+roomCaption+'</div></div>'+
+    '<div><span class="plan-payment-flag'+payClass+'">'+escapeHtml(payText)+'</span><div class="plan-secondary">'+escapeHtml(costRows.join(' / ')||'금액 미입력')+'</div></div>'+
+    '<div><span class="plan-state'+stateClass+'"><span class="dot"></span>'+escapeHtml(label)+'</span><div class="plan-progress"><span style="width:'+Number(p.progress_percent||0)+'%"></span></div><div class="plan-secondary">'+Number(p.progress_percent||0)+'% 진행</div></div>'+
+    '<div class="plan-quick">'+(done?'<span class="plan-completed-label">✓ 진행완료</span>':'<button class="plan-complete-action">✓ 완료 처리</button>')+'<button class="plan-edit-action">수정</button></div>';
+   row.querySelector('.plan-edit-action').onclick=()=>planEditor(p);
+   const completeButton=row.querySelector('.plan-complete-action');
+   if(completeButton)completeButton.onclick=async()=>{
+    if(!confirm(p.client_name+' · '+planSafeDate(p.work_date)+' 작업을 진행완료로 처리할까요?'))return;
+    completeButton.disabled=true;completeButton.textContent='저장 중...';
+    try{
+     await post('/api/plans/'+encodeURIComponent(p.id)+'/complete');
+     await loadPlans();
+     $('planFeedback').classList.remove('hidden');$('planFeedback').textContent='✓ '+p.client_name+' 작업을 진행완료로 저장했습니다.';
+    }catch(e){completeButton.disabled=false;completeButton.textContent='✓ 완료 처리';$('planFeedback').classList.remove('hidden');$('planFeedback').textContent='완료 처리 실패: '+e.message}
+   };
+   sec.append(row);
+   if(p.progress_data||p.note){
+    const detail=document.createElement('div');detail.className='plan-note';
+    const detailParts=[];
+    if(p.progress_data)detailParts.push('<strong>진행 데이터</strong> '+escapeHtml(p.progress_data));
+    if(p.note)detailParts.push('<strong>메모</strong> '+escapeHtml(p.note));
+    detail.innerHTML=detailParts.join('　 ·　 ');sec.append(detail);
+   }
+  }
+  holder.append(sec);
  }
- if(!rows.length)holder.innerHTML='<div class="empty">해당 조건의 일정이 없습니다. 오른쪽 상단에서 일정을 추가해 주세요.</div>';
+ if(!rows.length)holder.innerHTML='<div class="plan-empty">조건에 맞는 일정이 없습니다.<div style="margin-top:8px">검색어나 진행 상태를 바꾸거나 새 일정을 등록해 주세요.</div></div>';
 }
 $('plansPanelButton').onclick=()=>showPlanPanel(true);
 $('planClose').onclick=()=>showPlanPanel(false);
@@ -232,6 +280,8 @@ $('planEditorClose').onclick=()=>$('planEditor').classList.add('hidden');
 $('planProgress').oninput=()=>$('planProgressLabel').textContent=$('planProgress').value+'%';
 $('planSearch').oninput=renderPlans;
 $('planFilter').onchange=renderPlans;
+$('planReload').onclick=()=>run(loadPlans);
+$('planWorkStatus').onchange=()=>{if($('planWorkStatus').value==='작업완료'){$('planProgress').value=100;$('planProgressLabel').textContent='100%'}};
 $('planSave').onclick=()=>run(async()=>{
  const data=planFormData();
  if(!data.client_name||!data.work_date)throw Error('클라이언트와 작업일을 입력해 주세요');
@@ -249,6 +299,8 @@ $('planDelete').onclick=()=>run(async()=>{
  $('planEditor').classList.add('hidden');await loadPlans();
 });
 function showAccessPanel(show){
+ document.querySelector('.wrap').classList.remove('planner-mode');
+ document.querySelector('.layout').classList.remove('planner-layout');
  $('plansPanel').classList.add('hidden');
  $('accessPanel').classList.toggle('hidden',!show);
  $('regularPanel').classList.toggle('hidden',show);
@@ -314,7 +366,7 @@ $('accessSave').onclick=()=>run(async()=>{
  renderAccessGroupChecks();await loadAccessKeys();
 });
 async function loadGroups(){groups=await api('/api/groups');if(group&&!groups.some(g=>g.chat_id===group.chat_id)){group=null;$('selectedTitle').textContent='그룹 선택';$('groupMeta').textContent='연결된 그룹을 선택하세요.';for(const tab of ['promote','admins','settings','members','emergency','logs'])$(tab).classList.add('hidden');status('연결이 해제된 그룹은 목록에서 제외됐습니다.')}$('groups').innerHTML='';for(const g of groups){const b=document.createElement('button');b.className='group'+(group?.chat_id===g.chat_id?' active':'');b.innerHTML='<strong>'+escapeHtml(g.title)+'</strong><small>'+escapeHtml(g.member_count??'인원 미확인')+'명 · 관리자 임명 '+(g.bot_promote?'가능':'권한 없음')+'</small>';b.onclick=()=>selectGroup(g);$('groups').append(b)}if(!groups.length)$('groups').innerHTML='<div class="empty">등록된 그룹이 없습니다.</div>'}
-async function selectGroup(g){$('plansPanel').classList.add('hidden');$('accessPanel').classList.add('hidden');$('regularPanel').classList.remove('hidden');group=g;picked=null;pickedManagement=null;$('targetUser').value='';$('manageSelected').textContent='선택한 회원이 없습니다.';$('picked').textContent='선택된 회원 없음';$('verifyResult').textContent='회원을 선택하면 현재 상태를 조회할 수 있습니다.';$('lookupResult').classList.add('hidden');lookupMessage('선택한 그룹에서 @사용자명을 검색해 주세요.');$('selectedTitle').textContent=g.title;$('groupMeta').textContent='그룹 ID '+g.chat_id+' · '+(g.member_count??'인원 미확인')+'명 · 임명권한 '+(g.bot_promote?'있음':'없음');$('newTitle').value=g.title;await loadGroups();await switchTab(activeTab);await refreshAvailableRights()}
+async function selectGroup(g){document.querySelector('.wrap').classList.remove('planner-mode');document.querySelector('.layout').classList.remove('planner-layout');$('plansPanel').classList.add('hidden');$('accessPanel').classList.add('hidden');$('regularPanel').classList.remove('hidden');group=g;picked=null;pickedManagement=null;$('targetUser').value='';$('manageSelected').textContent='선택한 회원이 없습니다.';$('picked').textContent='선택된 회원 없음';$('verifyResult').textContent='회원을 선택하면 현재 상태를 조회할 수 있습니다.';$('lookupResult').classList.add('hidden');lookupMessage('선택한 그룹에서 @사용자명을 검색해 주세요.');$('selectedTitle').textContent=g.title;$('groupMeta').textContent='그룹 ID '+g.chat_id+' · '+(g.member_count??'인원 미확인')+'명 · 임명권한 '+(g.bot_promote?'있음':'없음');$('newTitle').value=g.title;await loadGroups();await switchTab(activeTab);await refreshAvailableRights()}
 async function members(){if(!group)return;const q=$('search').value;const rows=await api(groupPath('/members?q='+encodeURIComponent(q)));$('searchCount').textContent=rows.length+'명 조회 (최대 100명)';$('memberResults').innerHTML='';for(const m of rows){const name=[m.first_name,m.last_name].filter(Boolean).join(' ')||m.username||'이름 없음';const b=document.createElement('button');b.className='member'+(picked?.user_id===m.user_id?' selected':'');b.innerHTML='<div class="avatar">'+escapeHtml(name.slice(0,1))+'</div><div><div class="item-title">'+escapeHtml(name)+'</div><div class="item-sub">'+escapeHtml(m.username?'@'+m.username+' · ':'')+'ID '+escapeHtml(m.user_id)+'</div></div>';b.onclick=()=>{picked=m;$('picked').textContent='선택됨: '+name+' · '+m.user_id;$('targetUser').value=m.user_id;members().catch(e=>status(e.message))};$('memberResults').append(b)}if(!rows.length)$('memberResults').innerHTML='<div class="empty">검색 가능한 회원이 없습니다. 그룹에서 활동한 회원부터 저장됩니다.</div>'}
 let pickedManagement=null, manageQueryTimer=null;
 function chooseManageMember(m){
