@@ -75,7 +75,21 @@ try{
   await assert.rejects(()=>reviseDesignRegion(source,{x:25,y:20,w:50,h:30},'Retouch design detail'),/투명 영역/);
   globalThis.fetch=async()=>new Response(JSON.stringify({data:[{b64_json:aiOutput.toString('base64')}]}),{status:200});
   await assert.rejects(()=>reviseDesignRegion(source,{x:W-2,y:1,w:20,h:20},'test'),/수정 영역/);
-  console.log('PASS: boundaries, isolated composite, dimensions, and invalid selection');
+  // A label on a plain panel should not accept a full-area color replacement.
+  const labelSvg=Buffer.from('<svg width="180" height="110" xmlns="http://www.w3.org/2000/svg"><rect width="180" height="110" fill="#d7e1eb"/><text x="30" y="54" font-size="27" fill="#212121" font-family="sans-serif">Menu</text></svg>');
+  const labeled=await sharp(labelSvg).png().toBuffer();
+  const greenOutput=await sharp({create:{width:1024,height:1024,channels:4,background:{r:45,g:125,b:65,alpha:1}}}).png().toBuffer();
+  let qualityCalls=0;
+  globalThis.fetch=async()=>{
+    qualityCalls++;
+    return new Response(JSON.stringify({data:[{b64_json:greenOutput.toString('base64')}]}),{status:200});
+  };
+  await assert.rejects(
+    ()=>reviseDesignRegion(labeled,{x:20,y:20,w:95,h:45},'Edit label'),
+    /텍스트 스타일 검수 실패/
+  );
+  assert.equal(qualityCalls,2,'Low-quality edit should trigger at most one additional call');
+  console.log('PASS: boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
 }
