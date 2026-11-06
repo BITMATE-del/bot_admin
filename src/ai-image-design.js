@@ -1,7 +1,7 @@
 import sharp from 'sharp';
 
 const API = 'https://api.openai.com/v1/images/edits';
-const ALLOWED = new Set(['gpt-image-2.5-sunburst','gpt-image-2.5-flare','gpt-image-2']);
+const ALLOWED = new Set(['gpt-image-2.6-sunburst','gpt-image-2.6-flare','gpt-image-2.5-sunburst','gpt-image-2.5-flare','gpt-image-2']);
 const MODEL = () => {
   const configured = process.env.OPENAI_IMAGE_MODEL?.trim();
   return ALLOWED.has(configured) ? configured : 'gpt-image-2.5-sunburst';
@@ -41,12 +41,17 @@ async function invoke(input,instruction,mask) {
   activeCalls++;
   try {
   const form = new FormData();
-  form.append('model',MODEL());
+  const model=MODEL();
+  const preferredQuality=String(process.env.IMAGE_API_QUALITY||'high').trim().toLowerCase();
+  const validQuality=new Set(['low','medium','high','xhigh','max']);
+  const quality=validQuality.has(preferredQuality) && (['xhigh','max'].includes(preferredQuality) ? model.includes('2.5-') : true) ? preferredQuality : 'high';
+  const started=Date.now();
+  form.append('model',model);
   form.append('image',new Blob([input],{type:'image/png'}),'original.png');
   if (mask) form.append('mask',new Blob([mask],{type:'image/png'}),'mask.png');
   form.append('prompt',promptFor(instruction));
   form.append('size','1024x1024');
-  form.append('quality','high');
+  form.append('quality',quality);
   form.append('output_format','png');
   // Output is composited into an opaque source image. Do not accept an
   // automatically chosen transparent background for regional editing.
@@ -62,7 +67,13 @@ async function invoke(input,instruction,mask) {
     }
     const data = result?.data?.[0]?.b64_json;
     if (!data) throw new Error('이미지 편집 API가 결과 이미지를 반환하지 않았습니다.');
-    return Buffer.from(data,'base64');
+    const output=Buffer.from(data,'base64');
+    console.info('image API complete',JSON.stringify({
+      model,quality,elapsedMs:Date.now()-started,
+      inputBytes:input.length,outputBytes:output.length,
+      masked:Boolean(mask),usage:result?.usage||null
+    }));
+    return output;
   } catch(err) {
     if (err.name==='AbortError') throw new Error('AI 편집 요청이 시간 초과되었습니다.');
     throw err;
