@@ -380,6 +380,7 @@ export function mountImageBot(app,base){
       ready:[0,'수정 위치 선택 대기'],
       preparing:[15,'원본 이미지 준비 중'],
       editing:[60,'AI가 이미지를 수정 중'],
+      verifying:[85,'편집 결과 파일 검수 중'],
       sending:[95,'텔레그램으로 결과 전송 중'],
       done:[100,'수정 완료'],
       failed:[0,'수정 실패']
@@ -396,7 +397,7 @@ export function mountImageBot(app,base){
   app.post('/api/image-job/:id/apply',(req,res)=>{
     const job=getManual(req);
     if(!job)return res.status(404).json({error:'Expired edit request'});
-    if(['preparing','editing','sending'].includes(job.state))return res.status(202).json({state:job.state});
+    if(['preparing','editing','verifying','sending'].includes(job.state))return res.status(202).json({state:job.state});
     if(job.state==='done')return res.json({state:'done'});
     if(String(req.body?.after||'')!==job.change.to)return res.status(400).json({error:'Unexpected replacement value'});
     const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
@@ -417,6 +418,8 @@ export function mountImageBot(app,base){
       try{
         job.state='editing';
         const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
+        job.state='verifying';
+        await verifyOutputFile(job.buf,output);
         job.state='sending';
         await sendOriginalAndEdit(job.chatId,job.buf,output);
         job.state='done';
