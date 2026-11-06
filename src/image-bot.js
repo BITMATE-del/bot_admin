@@ -100,7 +100,11 @@ function originalOCRBounds(found,width,height){
   ].map(([x,y])=>pointToOriginal(x,y,found.angle,width,height,found.rw,found.rh));
   const left=Math.max(0,Math.floor(Math.min(...corners.map(p=>p.x))-4));
   const top=Math.max(0,Math.floor(Math.min(...corners.map(p=>p.y))-4));
-  const right=Math.min(width,Math.ceil(Math.max(...corners.map(p=>p.x))+4));
+  // Reserve space for wider replacement glyphs without shifting the
+  // left-hand anchor. The source OCR box is frequently tight to the ink.
+  const glyphWidth=Math.max(1,Math.max(...corners.map(p=>p.x))-Math.min(...corners.map(p=>p.x)));
+  const rightPad=Math.max(8,Math.min(28,Math.ceil(glyphWidth*0.25)));
+  const right=Math.min(width,Math.ceil(Math.max(...corners.map(p=>p.x))+rightPad));
   const bottom=Math.min(height,Math.ceil(Math.max(...corners.map(p=>p.y))+4));
   if(right-left<4||bottom-top<4)throw new Error('자동 선택 영역의 좌표가 올바르지 않아 직접 위치를 선택해 줘.');
   return {left,top,right,bottom};
