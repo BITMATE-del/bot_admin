@@ -120,10 +120,17 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
     left:offsetX,top:offsetY,right:1024-fitW-offsetX,bottom:1024-fitH-offsetY,
     background:{r:255,g:255,b:255,alpha:255}
   }).png().toBuffer();
-  const maskX=Math.max(0,Math.floor((x-cropLeft)*scale)+offsetX);
-  const maskY=Math.max(0,Math.floor((y-cropTop)*scale)+offsetY);
-  const maskW=Math.max(1,Math.min(1024-maskX,Math.ceil(w*scale)));
-  const maskH=Math.max(1,Math.min(1024-maskY,Math.ceil(h*scale)));
+  // Map both rectangle edges using the *actual* resized dimensions.
+  // Using a scale calculated before fitW/fitH were rounded can shift the mask
+  // by several source pixels on narrow or highly rectangular crops.
+  const leftEdge=Math.round((x-cropLeft)*fitW/cropW)+offsetX;
+  const rightEdge=Math.round((x+w-cropLeft)*fitW/cropW)+offsetX;
+  const topEdge=Math.round((y-cropTop)*fitH/cropH)+offsetY;
+  const bottomEdge=Math.round((y+h-cropTop)*fitH/cropH)+offsetY;
+  const maskX=Math.max(0,Math.min(1023,leftEdge));
+  const maskY=Math.max(0,Math.min(1023,topEdge));
+  const maskW=Math.max(1,Math.min(1024-maskX,rightEdge-maskX));
+  const maskH=Math.max(1,Math.min(1024-maskY,bottomEdge-maskY));
   const transparency=Buffer.alloc(1024*1024,255);
   for(let yy=maskY; yy<maskY+maskH; yy++) transparency.fill(0,yy*1024+maskX,yy*1024+maskX+maskW);
   const rgba=Buffer.alloc(1024*1024*4,255);
