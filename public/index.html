@@ -2,6 +2,71 @@
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>그룹 비상 관리자</title>
 <style>
 :root{font-family:system-ui,-apple-system,"Pretendard",sans-serif;color:#17233a;background:#f3f6fb}*{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit}button{cursor:pointer;border:0}button:disabled{opacity:.45;cursor:not-allowed}.wrap{max-width:1200px;margin:0 auto;padding:32px 18px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}.brand{font-size:22px;font-weight:800;letter-spacing:-.6px}.muted{color:#77839b;font-size:13px}.panel{background:#fff;border:1px solid #e3e9f3;border-radius:18px;padding:24px;box-shadow:0 6px 30px #1c386008}.layout{display:grid;grid-template-columns:270px 1fr;gap:20px}.sidebar{align-self:start}.group{display:block;width:100%;text-align:left;background:white;border:1px solid #e8edf5;padding:14px;border-radius:12px;margin-top:8px;color:#263757}.group.active{border-color:#4265ec;background:#f3f6ff}.group small{display:block;color:#8794a9;margin-top:5px}h2{font-size:18px;margin:0 0 18px}h3{font-size:15px;margin:0 0 12px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}.tabs button{background:#f0f3f9;color:#4d5f7a;border-radius:9px;padding:10px 14px}.tabs button.active{background:#4463e6;color:#fff}.field{display:flex;flex-direction:column;gap:7px;margin:14px 0;color:#506080;font-size:13px;font-weight:600}input,textarea,select{border:1px solid #dbe3f0;border-radius:11px;padding:13px 14px;background:white;color:#17233a;width:100%;outline:0}input:focus,textarea:focus{border-color:#496bfb}.primary{background:#4968e8;color:#fff;padding:13px 20px;border-radius:11px;font-weight:700}.secondary{background:#f0f3fa;color:#354764;padding:11px 14px;border-radius:9px}.danger{background:#c93a49;color:#fff;padding:11px 14px;border-radius:9px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.list{border:1px solid #e4eaf4;border-radius:13px;overflow:auto;max-height:310px}.member{width:100%;display:flex;gap:12px;align-items:center;padding:12px;background:#fff;border-bottom:1px solid #eef1f6;text-align:left}.member:hover,.member.selected{background:#eef3ff}.avatar{width:37px;height:37px;border-radius:50%;background:#eaf0fd;color:#4861b5;display:grid;place-items:center;font-weight:700;flex-shrink:0}.item-title{font-size:14px;font-weight:700}.item-sub{color:#8490a3;font-size:12px;margin-top:3px}.rights{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}.rights label{display:flex;align-items:center;gap:8px;color:#3e4f6c;font-size:13px}.rights input{width:16px;height:16px}.status{padding:10px 13px;border-radius:10px;font-size:13px;background:#eff3f9;margin:12px 0;white-space:pre-wrap}.hidden{display:none!important}.empty{padding:25px;text-align:center;color:#8b96aa;font-size:13px}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.log{padding:12px 4px;border-bottom:1px solid #edf1f6;font-size:13px}.login{max-width:430px;margin:8vh auto}.login h1{font-size:23px}.hint{font-size:12px;line-height:1.6;color:#8a97ad}.badge{font-size:12px;border-radius:99px;padding:5px 9px;background:#f0f3fa;color:#4d6080}.group-head{margin-bottom:15px}@media(max-width:800px){.layout{grid-template-columns:1fr}.wrap{padding:18px 12px}.panel{padding:16px}.rights,.formgrid{grid-template-columns:1fr}.sidebar{position:static}}
+
+/* Owner-only operations planner: focused data-first workspace */
+.wrap.planner-mode{max-width:1580px}
+.layout.planner-layout{grid-template-columns:225px minmax(0,1fr)}
+.planner-layout>.panel{min-width:0}
+.planner-layout main.panel{padding:27px 30px}
+.planner-layout aside.panel{position:sticky;top:18px}
+.plan-head{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:20px;flex-wrap:wrap}
+.plan-eyebrow{color:#5e739c;font-size:11px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase;margin-bottom:7px}
+.plan-head h2{font-size:26px;letter-spacing:-1px;margin:0 0 6px;color:#162443}
+.plan-subtitle{font-size:13px;color:#7a89a2;line-height:1.6}
+.plan-head-actions{display:flex;align-items:center;gap:9px}
+.plan-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0 22px}
+.plan-kpi{min-width:0;padding:18px 18px 16px;background:#fff;border:1px solid #e2eaf5;border-radius:15px;box-shadow:0 5px 16px #263e6807}
+.plan-kpi .kpi-label{font-size:12px;font-weight:650;color:#7d8aa1;margin-bottom:12px}
+.plan-kpi .kpi-value{font-size:29px;font-weight:850;line-height:1;letter-spacing:-1.4px;color:#18284a}
+.plan-kpi .kpi-suffix{font-size:12px;color:#8590a4;margin:9px 0 0}
+.plan-kpi.kpi-alert{background:#fffbf6;border-color:#f6e9d5}
+.plan-kpi.kpi-done{background:#f3fbf7;border-color:#d5ebdf}
+.plan-kpi.kpi-done .kpi-value{color:#23825f}
+.plan-toolbar{display:grid;grid-template-columns:minmax(170px,1fr) 155px auto;gap:10px;align-items:end;background:#f7f9fd;border:1px solid #e7ecf5;padding:13px;border-radius:14px;margin-bottom:23px}
+.plan-toolbar .field{margin:0;font-size:11px}
+.plan-toolbar input,.plan-toolbar select{height:42px;padding:9px 12px;background:white;border-radius:9px;font-size:13px}
+.plan-toolbar .secondary{height:42px;white-space:nowrap}
+.plan-day{margin:23px 0 27px;border:1px solid #e1e9f4;border-radius:15px;background:#fff;overflow:hidden;box-shadow:0 8px 23px #172b5505}
+.plan-day-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:#f7f9fe;padding:17px 19px;border-bottom:1px solid #e7edf7}
+.plan-day-title{font-weight:850;font-size:17px;letter-spacing:-.4px;color:#233352}
+.plan-day-meta{font-size:12px;color:#74819b;margin-top:5px}
+.plan-day-bar{height:4px;background:#e8edf5}
+.plan-day-bar>span{display:block;height:100%;background:#4d70ed;transition:width .2s}
+.plan-cols,.plan-entry{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(110px,.94fr) minmax(140px,1.08fr) minmax(100px,.85fr) 148px;gap:13px;align-items:center}
+.plan-cols{padding:10px 17px;background:#fcfdff;color:#8995ab;font-size:11px;font-weight:700;letter-spacing:.3px;border-bottom:1px solid #eff2f8}
+.plan-entry{padding:15px 17px;border-bottom:1px solid #eef2f8;transition:background .15s;min-width:0}
+.plan-entry:last-child{border-bottom:0}
+.plan-entry:hover{background:#fafbff}
+.plan-entry.is-complete{background:#f9fcfa}
+.plan-entry.is-complete:hover{background:#f4fbf7}
+.plan-client{font-size:15px;font-weight:800;color:#203253;white-space:normal;overflow-wrap:anywhere}
+.plan-secondary{font-size:11px;color:#8390a8;line-height:1.6;margin-top:4px;overflow-wrap:anywhere}
+.plan-primary{font-size:14px;font-weight:780;color:#243657}
+.plan-payment-flag{display:inline-flex;align-items:center;border-radius:7px;padding:4px 8px;font-size:11px;font-weight:750;background:#eef2f8;color:#53627d}
+.plan-payment-flag.pending{background:#fff1e4;color:#af682a}
+.plan-payment-flag.paid{background:#e9f7ef;color:#257b52}
+.plan-state{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:750;color:#687a99}
+.plan-state .dot{height:7px;width:7px;border-radius:50%;background:#9aa7b9}
+.plan-state.complete{color:#25845c}
+.plan-state.complete .dot{background:#30a477}
+.plan-state.active{color:#466fe1}
+.plan-state.active .dot{background:#527af5}
+.plan-progress{height:5px;border-radius:6px;background:#e8edf5;overflow:hidden;margin-top:10px}
+.plan-progress>span{display:block;height:100%;background:#5875ed;border-radius:6px}
+.plan-entry.is-complete .plan-progress>span{background:#30a477}
+.plan-quick{display:flex;gap:7px;justify-content:flex-end;align-items:center}
+.plan-quick button{font-size:11px;font-weight:750;padding:9px 10px;border-radius:8px;white-space:nowrap}
+.plan-complete-action{background:#e8f4ec;color:#238056}
+.plan-complete-action:hover{background:#d9eee1}
+.plan-completed-label{color:#22805d;font-size:11px;font-weight:800;white-space:nowrap}
+.plan-edit-action{background:#edf1f9;color:#455672}
+.plan-note{padding:0 17px 13px;font-size:11px;color:#8995ab;line-height:1.5;border-bottom:1px solid #eef2f8}
+.plan-note strong{color:#647493}
+.plan-empty{border:1px dashed #d7dfed;border-radius:14px;background:#fcfdff;color:#8490a7;padding:48px 18px;text-align:center;font-size:13px}
+@media(max-width:1170px){.plan-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.plan-cols,.plan-entry{grid-template-columns:minmax(120px,1.2fr) minmax(95px,.8fr) minmax(112px,1fr) minmax(90px,.75fr) 126px;gap:8px}.plan-entry{padding:14px 12px}.plan-cols{padding:10px 12px}.plan-quick{flex-wrap:wrap}.plan-quick button{padding:7px 9px}}
+@media(max-width:800px){.layout.planner-layout{grid-template-columns:1fr}.planner-layout aside.panel{position:static}.planner-layout main.panel{padding:18px 15px}.plan-head h2{font-size:22px}.plan-toolbar{grid-template-columns:1fr 1fr}.plan-toolbar button{grid-column:1/-1}.plan-day{margin:16px 0}.plan-cols{display:none}.plan-entry{grid-template-columns:1fr 1fr;gap:13px;padding:16px}.plan-entry>div:first-child{grid-column:1/-1}.plan-quick{justify-content:flex-start;grid-column:1/-1}.plan-note{padding:0 16px 13px}}
+@media(max-width:480px){.plan-kpis{gap:8px}.plan-kpi{padding:13px}.plan-kpi .kpi-value{font-size:24px}.plan-toolbar{grid-template-columns:1fr}.plan-toolbar button{grid-column:auto}.plan-entry{grid-template-columns:1fr 1fr}}
+
 </style></head><body>
 <div class="wrap">
 <header class="top"><div><div class="brand">🛡 그룹 비상 관리자</div><div class="muted">Telegram 통합 관리 센터</div></div><button id="logout" class="secondary hidden">로그아웃</button></header>
@@ -9,12 +74,13 @@
 <div id="app" class="layout hidden"><aside class="panel sidebar"><div class="row"><h2 style="margin:0">연결 그룹</h2><button id="reload" class="secondary">새로고침</button></div><div id="groups"></div><button id="accessPanelButton" class="secondary hidden" style="width:100%;margin-top:16px">관리 비밀번호 · 그룹 배정</button><button id="plansPanelButton" class="secondary hidden" style="width:100%;margin-top:9px">작업 일정표 · 클라이언트</button><p class="hint">그룹에 봇을 관리자 권한으로 추가하면 자동으로 표시됩니다.</p></aside>
 <main class="panel">
 <section id="plansPanel" class="hidden">
-<div class="row" style="flex-wrap:wrap"><div><h2 style="margin:0 0 5px">작업 일정표</h2><p class="muted">본사 전용 · 날짜별 작업, 클라이언트, 결제 및 진행 현황</p></div><div class="row"><button id="planNew" class="primary">일정 추가</button><button id="planClose" class="secondary">닫기</button></div></div>
-<div class="formgrid" style="margin:14px 0">
-<label class="field">일정 검색<input id="planSearch" placeholder="클라이언트 · 진행방 · 메모 검색"></label>
+<div class="plan-head"><div><div class="plan-eyebrow">OPERATIONS / SCHEDULE</div><h2>작업 일정 관리</h2><div class="plan-subtitle">작업 현황과 결제 상황을 날짜별로 한눈에 확인하세요.</div></div><div class="plan-head-actions"><button id="planNew" class="primary">＋ 일정 등록</button><button id="planClose" class="secondary">닫기</button></div></div>
+<div id="planStats" class="plan-kpis"></div>
+<div class="plan-toolbar">
+<label class="field">빠른 검색<input id="planSearch" placeholder="클라이언트 · 진행방 · 메모 검색"></label>
 <label class="field">진행 상태<select id="planFilter"><option value="">전체 상태</option><option>예정</option><option>준비중</option><option>진행중</option><option>작업완료</option><option>보류</option><option>취소</option></select></label>
 </div>
-<div id="planStats" class="formgrid" style="margin:12px 0"></div>
+<button id="planReload" class="secondary">↻ 새로고침</button>
 <section id="planEditor" class="hidden panel" style="background:#f8faff;margin-bottom:18px">
 <div class="row"><h3 id="planEditorTitle">작업 일정 등록</h3><button id="planEditorClose" class="secondary">닫기</button></div>
 <div class="formgrid">
