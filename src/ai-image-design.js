@@ -237,6 +237,37 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   }
   const labelOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
     .ensureAlpha().raw().toBuffer();
+  // On flat UI label backgrounds, reject foreground pixels that touch the
+  // selection boundary: clipping is irreversible after patch extraction.
+  // Only evaluate a likely text region; textured photographs are ignored.
+  const edgeBand=Math.min(2,Math.max(1,Math.floor(w/14)));
+  const borderSamples=[];
+  for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++){
+    if(xx<2||yy<2||xx>=w-2||yy>=h-2){
+      const i=(yy*w+xx)*4;
+      borderSamples.push([labelOriginal[i],labelOriginal[i+1],labelOriginal[i+2]]);
+    }
+  }
+  const median=arr=>{arr.sort((a,b)=>a-b);return arr[Math.floor(arr.length/2)]};
+  const bg=[0,1,2].map(c=>median(borderSamples.map(px=>px[c])));
+  const delta=(buffer,i)=>Math.max(
+    Math.abs(buffer[i]-bg[0]),Math.abs(buffer[i+1]-bg[1]),Math.abs(buffer[i+2]-bg[2])
+  );
+  const borderNoise=borderSamples.reduce((sum,p)=>sum+Math.max(
+    Math.abs(p[0]-bg[0]),Math.abs(p[1]-bg[1]),Math.abs(p[2]-bg[2])
+  ),0)/Math.max(1,borderSamples.length);
+  if(borderNoise<14){
+    let sourceInk=0,rightInk=0;
+    for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++){
+      const i=(yy*w+xx)*4;
+      if(delta(labelOriginal,i)>=42)sourceInk++;
+      if(xx>=w-edgeBand && yy>=2 && yy<h-2 && delta(bytes,i)>=48)rightInk++;
+    }
+    if(sourceInk>=Math.max(4,Math.floor(w*h*.012)) && sourceInk<w*h*.45 &&
+       rightInk>=Math.max(3,Math.ceil(h*.09))){
+      throw new Error('글자가 선택 영역 오른쪽 경계에 닿아 잘릴 가능성이 있어. 오른쪽 여유를 포함해 다시 선택해 줘.');
+    }
+  }
   const mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
   if(mismatch){
     if(attempt===0){
