@@ -255,8 +255,26 @@ app.get('/api/plans',auth,ownerOnly,async(req,res,next)=>{try{
  res.setHeader('Cache-Control','no-store');res.json(rows);
 }catch(e){next(e)}});
 app.post('/api/plans',auth,ownerOnly,async(req,res,next)=>{try{
- const data=parsePlan(req.body);
- const query=`INSERT INTO work_plans(${planColumns.join(',')}) VALUES(${planColumns.map((_,i)=>'
+ const d=parsePlan(req.body);
+ const values=planColumns.map(k=>d[k]);
+ const placeholders=planColumns.map((_,i)=>String.fromCharCode(36)+String(i+1)).join(',');
+ const rows=await sql('INSERT INTO work_plans('+planColumns.join(',')+') VALUES('+placeholders+') RETURNING id::text',values);
+ res.json({ok:true,id:rows[0].id});
+}catch(e){next(e)}});
+app.put('/api/plans/:id',auth,ownerOnly,async(req,res,next)=>{try{
+ const id=positiveId(req.params.id);if(!id)return res.sendStatus(400);
+ const d=parsePlan(req.body);
+ const setClause=planColumns.map((k,i)=>k+'='+String.fromCharCode(36)+String(i+2)).join(',');
+ const rows=await sql('UPDATE work_plans SET '+setClause+',updated_at=NOW() WHERE id=$1 RETURNING id::text',[id,...planColumns.map(k=>d[k])]);
+ if(!rows.length)return res.status(404).json({error:'일정을 찾을 수 없습니다'});
+ res.json({ok:true,id});
+}catch(e){next(e)}});
+app.delete('/api/plans/:id',auth,ownerOnly,async(req,res,next)=>{try{
+ const id=positiveId(req.params.id);if(!id)return res.sendStatus(400);
+ const rows=await sql('DELETE FROM work_plans WHERE id=$1 RETURNING id',[id]);
+ if(!rows.length)return res.status(404).json({error:'일정을 찾을 수 없습니다'});
+ res.json({ok:true});
+}catch(e){next(e)}});
 app.post('/api/group-connections/reconcile',auth,ownerOnly,async(req,res,next)=>{try{
  if(limited('reconcile:'+requestIp(req),3,60000))return res.status(429).json({error:'잠시 후 다시 조회해 주세요'});
  await reconcileGroups();
