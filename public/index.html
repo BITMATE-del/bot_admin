@@ -14,12 +14,14 @@
 .plan-head h2{font-size:26px;letter-spacing:-1px;margin:0 0 6px;color:#162443}
 .plan-subtitle{font-size:13px;color:#7a89a2;line-height:1.6}
 .plan-head-actions{display:flex;align-items:center;gap:9px}
-.plan-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0 22px}
+.plan-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:20px 0 22px}
 .plan-kpi{min-width:0;padding:18px 18px 16px;background:#fff;border:1px solid #e2eaf5;border-radius:15px;box-shadow:0 5px 16px #263e6807}
 .plan-kpi .kpi-label{font-size:12px;font-weight:650;color:#7d8aa1;margin-bottom:12px}
 .plan-kpi .kpi-value{font-size:29px;font-weight:850;line-height:1;letter-spacing:-1.4px;color:#18284a}
 .plan-kpi .kpi-suffix{font-size:12px;color:#8590a4;margin:9px 0 0}
 .plan-kpi.kpi-alert{background:#fffbf6;border-color:#f6e9d5}
+.plan-kpi.kpi-money .kpi-value{font-size:25px;letter-spacing:-.9px;white-space:normal;overflow-wrap:anywhere}
+.plan-kpi.kpi-money .kpi-suffix{line-height:1.6}
 .plan-kpi.kpi-done{background:#f3fbf7;border-color:#d5ebdf}
 .plan-kpi.kpi-done .kpi-value{color:#23825f}
 .plan-toolbar{display:grid;grid-template-columns:minmax(170px,1fr) 155px auto;gap:10px;align-items:end;background:#f7f9fd;border:1px solid #e7ecf5;padding:13px;border-radius:14px;margin-bottom:23px}
@@ -208,10 +210,26 @@ function renderPlans(){
  const query=$('planSearch').value.trim().toLowerCase(),selectedStatus=$('planFilter').value;
  const rows=planRows.filter(p=>(!selectedStatus||p.work_status===selectedStatus)&&(!query||[p.client_name,p.room_name,p.note,p.progress_data,p.task_type].join(' ').toLowerCase().includes(query)));
  const all=planRows.length,done=planRows.filter(p=>p.work_status==='작업완료').length,unfinished=all-done;
- const pending=planRows.filter(p=>['결제대기','미결제'].includes(p.payment_status)).length;
- const volume=planRows.reduce((n,p)=>n+Number(p.quantity||0),0);
- const kpis=[['총 작업 일정',all,'등록된 전체 일정',''],['진행 대기·중',unfinished,'완료 전 작업',''],['진행완료',done,'완료율 '+(all?Math.round(done/all*100):0)+'%','kpi-done'],['결제 확인 필요',pending,'미결제 · 결제 대기','kpi-alert']];
- $('planStats').innerHTML=kpis.map(k=>'<div class="plan-kpi '+k[3]+'"><div class="kpi-label">'+escapeHtml(k[0])+'</div><div class="kpi-value">'+Number(k[1]).toLocaleString('ko-KR')+'</div><div class="kpi-suffix">'+escapeHtml(k[2])+'</div></div>').join('');
+ const pendingRows=planRows.filter(p=>['결제대기','미결제'].includes(p.payment_status));
+ const paidRows=planRows.filter(p=>p.payment_status==='결제완료');
+ const validMoney=p=>p.payment_amount!==null&&p.payment_amount!==undefined&&p.payment_amount!==''&&Number.isFinite(Number(p.payment_amount));
+ function paymentSummary(items){
+  const entered=items.filter(validMoney);
+  return {
+   label:entered.length?'₩ '+entered.reduce((sum,p)=>sum+Number(p.payment_amount),0).toLocaleString('ko-KR'):'금액 미입력',
+   details:items.length+'건 중 '+entered.length+'건 금액 입력'+(items.length>entered.length?' · '+(items.length-entered.length)+'건 미입력':'')
+  };
+ }
+ const pendingPayment=paymentSummary(pendingRows),paidPayment=paymentSummary(paidRows);
+ const kpis=[
+  {title:'전체 작업 일정',value:all.toLocaleString('ko-KR'),note:'등록된 전체 일정',style:''},
+  {title:'진행 대기·중',value:unfinished.toLocaleString('ko-KR'),note:'완료 전 작업',style:''},
+  {title:'진행완료',value:done.toLocaleString('ko-KR'),note:'완료율 '+(all?Math.round(done/all*100):0)+'%',style:'kpi-done'},
+  {title:'결제 확인 필요',value:pendingRows.length.toLocaleString('ko-KR'),note:'미결제 · 결제 대기',style:'kpi-alert'},
+  {title:'결제대기 금액',value:pendingPayment.label,note:pendingPayment.details,style:'kpi-alert kpi-money'},
+  {title:'결제완료 금액',value:paidPayment.label,note:paidPayment.details,style:'kpi-done kpi-money'}
+ ];
+ $('planStats').innerHTML=kpis.map(k=>'<div class="plan-kpi '+k.style+'"><div class="kpi-label">'+escapeHtml(k.title)+'</div><div class="kpi-value">'+escapeHtml(k.value)+'</div><div class="kpi-suffix">'+escapeHtml(k.note)+'</div></div>').join('');
  const holder=$('planDays');holder.replaceChildren();
  const byDay=new Map();
  for(const p of rows){if(!byDay.has(p.work_date))byDay.set(p.work_date,[]);byDay.get(p.work_date).push(p)}
