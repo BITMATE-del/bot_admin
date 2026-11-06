@@ -113,6 +113,16 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction) {
   const patch=await sharp(fitted)
     .extract({left:x-cropLeft,top:y-cropTop,width:w,height:h})
     .ensureAlpha().raw().toBuffer({resolveWithObject:true});
+  // An image edit response can contain transparent pixels whose RGB channels
+  // are black. Reject such output before compositing rather than displaying
+  // transparent/black rectangles to the user.
+  let transparentPixels=0;
+  for(let i=3;i<patch.data.length;i+=4){
+    if(patch.data[i]<16)transparentPixels++;
+  }
+  if(transparentPixels > w*h*0.05){
+    throw new Error('편집 결과의 투명 영역이 비정상적으로 많아 적용하지 않았어. 원본은 유지돼.');
+  }
   // Blend only along the inside edge to avoid a rectangular seam while preserving
   // every pixel outside the selected region. Scale feather for small selections.
   const fade=Math.max(0,Math.min(6,Math.floor(Math.min(w,h)/10)));
