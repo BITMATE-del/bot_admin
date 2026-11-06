@@ -269,6 +269,13 @@ app.put('/api/plans/:id',auth,ownerOnly,async(req,res,next)=>{try{
  if(!rows.length)return res.status(404).json({error:'일정을 찾을 수 없습니다'});
  res.json({ok:true,id});
 }catch(e){next(e)}});
+// One-click completion is intentionally atomic and does not overwrite payment or room data.
+app.post('/api/plans/:id/complete',auth,ownerOnly,async(req,res,next)=>{try{
+ const id=positiveId(req.params.id);if(!id)return res.status(400).json({error:'올바른 일정 ID가 아닙니다'});
+ const rows=await sql("UPDATE work_plans SET work_status='작업완료',progress_percent=100,updated_at=NOW() WHERE id=$1 RETURNING id::text,work_status,progress_percent",[id]);
+ if(!rows.length)return res.status(404).json({error:'일정을 찾을 수 없습니다'});
+ res.setHeader('Cache-Control','no-store');res.json({ok:true,...rows[0]});
+}catch(e){next(e)}});
 app.delete('/api/plans/:id',auth,ownerOnly,async(req,res,next)=>{try{
  const id=positiveId(req.params.id);if(!id)return res.sendStatus(400);
  const rows=await sql('DELETE FROM work_plans WHERE id=$1 RETURNING id',[id]);
