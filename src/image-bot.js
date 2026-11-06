@@ -302,7 +302,16 @@ async function handle(update,base){
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'확인했어. 수정 이미지를 전송할게.'});
     try {
       const region=job.regions?.[0];
-      const output=region ? await reviseDesignRegion(job.buf,{x:Math.max(0,Math.floor(region.left)),y:Math.max(0,Math.floor(region.top)),w:Math.max(4,Math.floor(region.right-region.left)),h:Math.max(4,Math.floor(region.bottom-region.top))},'Replace '+job.change.from+' with '+job.change.to+'. Match all existing text properties, perspective and texture. Keep other elements untouched.') : await editWholeImage(job.buf,job.instruction);
+      if(!region)throw new Error('자동으로 찾은 수정 영역이 없어. 브라우저에서 직접 선택해 줘.');
+      const {width:sourceW,height:sourceH}=await sharp(job.buf).rotate().metadata();
+      const x=Math.max(0,Math.floor(region.left));
+      const y=Math.max(0,Math.floor(region.top));
+      const right=Math.min(sourceW,Math.ceil(region.right));
+      const bottom=Math.min(sourceH,Math.ceil(region.bottom));
+      if(![x,y,right,bottom].every(Number.isFinite)||right-x<4||bottom-y<4){
+        throw new Error('자동 수정 영역이 원본 범위를 벗어났어. 브라우저에서 직접 선택해 줘.');
+      }
+      const output=await reviseDesignRegion(job.buf,{x,y,w:right-x,h:bottom-y},'Edit the selected design region only. '+job.change.from+' to '+job.change.to+'. Preserve surrounding visual context.');
       await sendOriginalAndEdit(job.chatId,job.buf,output);
     } catch(error) { await send(job.chatId,'AI 편집 실패: '+error.message); }
     return;
