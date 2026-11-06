@@ -192,7 +192,7 @@ async function sendPreview(chatId,buf,id,manualUrl){
 async function sendImage(chatId,buf){
   const form=new FormData();
   form.append('chat_id',String(chatId));
-  form.append('caption','이미지 수정 완료');
+  form.append('caption','편집본 · 원본 이미지에서 수정한 결과입니다.');
   form.append('document',new Blob([buf],{type:'image/png'}),'edited.png');
   const resp=await fetch('https://api.telegram.org/bot'+token+'/sendDocument',{method:'POST',body:form,signal:AbortSignal.timeout(30000)});
   const json=await resp.json();
