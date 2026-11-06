@@ -105,6 +105,24 @@
 <div class="row"><button id="planSave" class="primary">일정 저장</button><button id="planDelete" class="danger hidden">이 일정 삭제</button></div>
 </section>
 <div id="planFeedback" class="status hidden" role="status"></div>
+<section class="panel" id="settlementPanel" style="padding:18px;margin:16px 0 22px;box-shadow:none;border-color:#dce7f3">
+<div class="row" style="flex-wrap:wrap;gap:10px"><div><h3 style="margin:0 0 5px;font-size:16px">정산 관리</h3><div class="muted">정산금액은 직접 입력 · 작업별로 누적 기록</div></div><div class="row"><button id="settlementAddToggle" class="primary">+ 정산 등록</button><button id="settlementHistoryToggle" class="secondary">정산내역 보기</button></div></div>
+<div id="settlementEditor" class="hidden" style="background:#f7f9fd;border:1px solid #e2e9f5;padding:16px;border-radius:12px;margin-top:16px">
+<div class="formgrid">
+<label class="field">정산할 작업 일정 *<select id="settlementPlan"><option value="">작업 선택</option></select></label>
+<label class="field">정산일 *<input id="settlementDate" type="date"></label>
+<label class="field">정산금액 (원) *<input id="settlementAmount" type="number" min="1" step="1" placeholder="예: 500000"></label>
+<label class="field">정산 메모<input id="settlementNote" maxlength="600" placeholder="예: 1차 정산 / 잔금 정산"></label>
+</div><div class="row" style="justify-content:flex-start"><button id="settlementSave" class="primary">정산 내역 저장</button><button id="settlementCancel" class="secondary">취소</button></div>
+<p class="hint">정산 내역은 독립적으로 누적되며, 결제상태나 결제금액은 자동으로 변경되지 않습니다.</p>
+</div>
+<div id="settlementMessage" class="status hidden" role="status"></div>
+<div id="settlementHistory" class="hidden" style="margin-top:17px">
+<div class="row" style="flex-wrap:wrap;margin-bottom:12px"><strong>정산내역 리스트</strong><span id="settlementCount" class="muted"></span></div>
+<div class="formgrid"><label class="field">클라이언트 / 메모 검색<input id="settlementSearch" placeholder="정산내역 검색"></label><label class="field">월별 조회<input id="settlementMonth" type="month"></label></div>
+<div id="settlementRows" class="list" style="max-height:460px"></div>
+</div>
+</section>
 <div id="planDays"></div>
 </section>
 <section id="accessPanel" class="hidden">
@@ -163,7 +181,7 @@
 <section id="emergency" class="hidden"><h3>그룹 긴급 조치</h3><p class="hint">소유자 계정에 문제가 생겼을 때 봇의 기존 관리자 권한으로 가능한 작업만 수행합니다.</p><div class="row" style="justify-content:flex-start"><button id="lock" class="danger">일반 회원 채팅 잠금</button><button id="unlock" class="secondary">채팅 잠금 해제</button></div><label class="field">메시지 ID<input id="messageId" inputmode="numeric" placeholder="메시지 숫자 ID"></label><div class="row" style="justify-content:flex-start"><button id="pin" class="secondary">공지 고정</button><button id="deleteMessage" class="danger">메시지 삭제</button></div><p class="hint">메시지 ID는 Telegram의 메시지 링크 등에서 확인할 수 있습니다.</p><button id="invite" class="secondary">새 초대 링크 발급</button><label class="field">생성된 초대 링크<input id="inviteResult" readonly placeholder="발급 후 표시됩니다"></label></section><section id="logs" class="hidden"><h3>최근 변경 기록</h3><div id="logsList"></div></section>
 <div id="status" class="status hidden" role="status"></div></div></main></div></div>
 <script>
-const $=id=>document.getElementById(id);let groups=[],group=null,picked=null,activeTab='promote',currentRole='manager',accessKeys=[],planRows=[],editingPlanId=null;
+const $=id=>document.getElementById(id);let groups=[],group=null,picked=null,activeTab='promote',currentRole='manager',accessKeys=[],planRows=[],settlementRows=[],editingPlanId=null;
 const escapeHtml=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function status(m){$('status').textContent=m;$('status').classList.remove('hidden')}
 async function api(url,opts={}){const r=await fetch(url,{credentials:'same-origin',headers:{'content-type':'application/json'},...opts});let v;try{v=await r.json()}catch{v={}}if(!r.ok)throw Error(v.error||'요청 실패 ('+r.status+')');return v}
@@ -202,10 +220,74 @@ function planFormData(){
 }
 async function loadPlans(){
  if(currentRole!=='owner')return;
- planRows=await api('/api/plans');
- renderPlans();
+ const results=await Promise.all([api('/api/plans'),api('/api/settlements')]);
+ planRows=results[0];settlementRows=results[1];
+ updateSettlementOptions();renderPlans();renderSettlementHistory();
 }
 
+
+function updateSettlementOptions(){
+ const select=$('settlementPlan'),previous=select.value;
+ select.replaceChildren();
+ const empty=document.createElement('option');empty.value='';empty.textContent='정산할 작업을 선택하세요';select.append(empty);
+ for(const p of planRows){
+  const option=document.createElement('option');option.value=p.id;
+  option.textContent=p.work_date+' · '+p.client_name+' · '+Number(p.quantity||0).toLocaleString('ko-KR')+'명·건';
+  select.append(option);
+ }
+ if(planRows.some(p=>p.id===previous))select.value=previous;
+}
+function showSettlementEditor(planId=''){
+ $('settlementEditor').classList.remove('hidden');
+ $('settlementPlan').value=planId||'';
+ $('settlementDate').value=new Date().toLocaleDateString('sv-SE');
+ $('settlementAmount').value='';$('settlementNote').value='';
+ $('settlementEditor').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function renderSettlementHistory(){
+ const filter=$('settlementSearch').value.trim().toLowerCase(),month=$('settlementMonth').value;
+ const rows=settlementRows.filter(x=>(!month||x.settlement_date.startsWith(month))&&(!filter||[x.client_name,x.note,x.work_date].join(' ').toLowerCase().includes(filter)));
+ const total=rows.filter(x=>!x.voided_at).reduce((n,x)=>n+Number(x.amount),0);
+ $('settlementCount').textContent=rows.filter(x=>!x.voided_at).length+'건 · '+planMoney(total);
+ const box=$('settlementRows');box.replaceChildren();
+ for(const x of rows){
+  const item=document.createElement('div');item.style.cssText='padding:12px 14px;border-bottom:1px solid #eef2f8;'+(x.voided_at?'opacity:.55;':'');
+  const first=document.createElement('div');first.className='row';first.style.flexWrap='wrap';
+  first.innerHTML='<div><strong>'+escapeHtml(x.client_name)+'</strong> <span class="muted">'+escapeHtml(x.settlement_date)+'</span><div class="item-sub">'+(x.work_date?'작업일 '+escapeHtml(x.work_date)+' · ':'')+escapeHtml(x.note||'메모 없음')+'</div></div><strong style="font-size:15px;color:'+(x.voided_at?'#8793a5':'#21805a')+'">'+(x.voided_at?'취소 · ':'')+escapeHtml(planMoney(x.amount))+'</strong>';
+  item.append(first);
+  if(!x.voided_at){
+   const button=document.createElement('button');button.className='secondary';button.style.cssText='margin-top:8px;font-size:11px;padding:6px 9px';button.textContent='정산 취소';
+   button.onclick=async()=>{if(!confirm(x.client_name+' 정산 '+planMoney(x.amount)+'을 취소 처리할까요? 내역은 보존됩니다.'))return;
+    button.disabled=true;
+    try{await post('/api/settlements/'+encodeURIComponent(x.id)+'/void');await loadPlans();settlementMessage('정산 취소 처리 완료 · 기록은 보존됩니다.')}catch(e){settlementMessage('정산 취소 실패: '+e.message);button.disabled=false}
+   };item.append(button);
+  }
+  box.append(item);
+ }
+ if(!rows.length)box.innerHTML='<div class="empty">조회 조건에 해당하는 정산내역이 없습니다.</div>';
+}
+function settlementMessage(message){$('settlementMessage').classList.remove('hidden');$('settlementMessage').textContent=message}
+$('settlementAddToggle').onclick=()=>showSettlementEditor();
+$('settlementCancel').onclick=()=>$('settlementEditor').classList.add('hidden');
+$('settlementHistoryToggle').onclick=()=>{
+ const isHidden=$('settlementHistory').classList.contains('hidden');
+ $('settlementHistory').classList.toggle('hidden',!isHidden);
+ $('settlementHistoryToggle').textContent=isHidden?'정산내역 닫기':'정산내역 보기';
+ if(isHidden)renderSettlementHistory();
+};
+$('settlementSearch').oninput=renderSettlementHistory;
+$('settlementMonth').onchange=renderSettlementHistory;
+$('settlementSave').onclick=async()=>{
+ const body={work_plan_id:$('settlementPlan').value,settlement_date:$('settlementDate').value,amount:$('settlementAmount').value,note:$('settlementNote').value};
+ if(!body.work_plan_id||!body.settlement_date||!/^\\d+$/.test(body.amount)||Number(body.amount)<=0){settlementMessage('작업·정산일·1원 이상의 정산금액을 정확하게 입력해 주세요.');return}
+ const button=$('settlementSave');button.disabled=true;button.textContent='저장 중...';
+ try{
+  await post('/api/settlements',body);
+  $('settlementEditor').classList.add('hidden');$('settlementHistory').classList.remove('hidden');$('settlementHistoryToggle').textContent='정산내역 닫기';
+  await loadPlans();settlementMessage('정산금액이 저장되고 정산내역에 추가됐습니다.');
+ }catch(e){settlementMessage('정산 저장 실패: '+e.message)}
+ finally{button.disabled=false;button.textContent='정산 내역 저장'}
+};
 function renderPlans(){
  const query=$('planSearch').value.trim().toLowerCase(),selectedStatus=$('planFilter').value;
  const rows=planRows.filter(p=>(!selectedStatus||p.work_status===selectedStatus)&&(!query||[p.client_name,p.room_name,p.note,p.progress_data,p.task_type].join(' ').toLowerCase().includes(query)));
@@ -227,7 +309,8 @@ function renderPlans(){
   {title:'진행완료',value:done.toLocaleString('ko-KR'),note:'완료율 '+(all?Math.round(done/all*100):0)+'%',style:'kpi-done'},
   {title:'결제 확인 필요',value:pendingRows.length.toLocaleString('ko-KR'),note:'미결제 · 결제 대기',style:'kpi-alert'},
   {title:'결제대기 금액',value:pendingPayment.label,note:pendingPayment.details,style:'kpi-alert kpi-money'},
-  {title:'결제완료 금액',value:paidPayment.label,note:paidPayment.details,style:'kpi-done kpi-money'}
+  {title:'결제완료 금액',value:paidPayment.label,note:paidPayment.details,style:'kpi-done kpi-money'},
+  {title:'총 정산금액',value:'₩ '+settlementRows.filter(x=>!x.voided_at).reduce((n,x)=>n+Number(x.amount),0).toLocaleString('ko-KR'),note:settlementRows.filter(x=>!x.voided_at).length+'건 수동 정산 등록',style:'kpi-money kpi-done'}
  ];
  $('planStats').innerHTML=kpis.map(k=>'<div class="plan-kpi '+k.style+'"><div class="kpi-label">'+escapeHtml(k.title)+'</div><div class="kpi-value">'+escapeHtml(k.value)+'</div><div class="kpi-suffix">'+escapeHtml(k.note)+'</div></div>').join('');
  const holder=$('planDays');holder.replaceChildren();
@@ -257,10 +340,13 @@ function renderPlans(){
    const numRooms=Number(p.room_count||0);
    const extra=p.room_name?' · '+escapeHtml(p.room_name):'';
    const roomCaption=(numRooms?numRooms+'개 방'+extra:(p.room_name?escapeHtml(p.room_name):'방 정보 미입력'))+(Number(p.room_members||0)?' · '+Number(p.room_members).toLocaleString('ko-KR')+'명 참여':'');
+   const thisSettlements=settlementRows.filter(x=>!x.voided_at&&x.work_plan_id===p.id);
+   const planSettlementAmount=thisSettlements.reduce((n,x)=>n+Number(x.amount),0);
    const costRows=[];
    if(p.payment_amount!==null)costRows.push('결제 '+planMoney(p.payment_amount));
    if(p.escrow_amount!==null)costRows.push('에스크로 '+planMoney(p.escrow_amount));
    if(p.account_cost!==null)costRows.push('계정값 '+planMoney(p.account_cost));
+   if(thisSettlements.length)costRows.push('정산 '+planMoney(planSettlementAmount)+' ('+thisSettlements.length+'건)');
    const row=document.createElement('div');row.className='plan-entry'+(done?' is-complete':'');
    row.innerHTML='<div><div class="plan-client">'+escapeHtml(p.client_name)+'</div><div class="plan-secondary">'+escapeHtml(p.task_type==='일반'?'일반 작업':p.task_type)+'</div></div>'+
     '<div><div class="plan-primary">'+quantity+' <span style="font-size:11px;font-weight:500;color:#7d8ca5">명·건</span></div><div class="plan-secondary">'+roomCaption+'</div></div>'+
