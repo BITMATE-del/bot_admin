@@ -303,7 +303,8 @@ async function handle(update,base){
     try {
       const region=job.regions?.[0];
       if(!region)throw new Error('자동으로 찾은 수정 영역이 없어. 브라우저에서 직접 선택해 줘.');
-      const {width:sourceW,height:sourceH}=await sharp(job.buf).rotate().metadata();
+      const upright=await sharp(job.buf).rotate().png().toBuffer();
+      const {width:sourceW,height:sourceH}=await sharp(upright).metadata();
       const x=Math.max(0,Math.floor(region.left));
       const y=Math.max(0,Math.floor(region.top));
       const right=Math.min(sourceW,Math.ceil(region.right));
