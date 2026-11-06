@@ -351,6 +351,7 @@ async function handle(update,base){
   }
   if(changes.length>1) {await send(chatId,'현재 정밀 영역 수정은 한 번에 한 곳씩 지원해. 첫 번째 변경부터 진행해 줘.');return;}
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
+  await send(chatId,'요청을 받았어. 이미지 위치를 확인하고 있어.');
   const manualId=makeManualJob(chatId,saved.buf,changes[0]);
   try{
     const {output,preview,regions}=await replaceText(saved.buf,changes);
