@@ -293,8 +293,36 @@ async function sendManualLink(chatId,jobId,base){
   await tg('sendMessage',{chat_id:chatId,text:'수정할 글자의 위치를 직접 선택할 수 있어. 아래 첫 버튼은 텔레그램 내부 화면, 두 번째는 외부 브라우저로 열어. 열리지 않으면 주소를 복사해서 크롬에 붙여넣어 줘. (30분 유효)\n\n'+url,disable_web_page_preview:true,reply_markup:{inline_keyboard:[[{text:'✏️ 텔레그램에서 위치 선택',web_app:{url}}],[{text:'🌐 브라우저로 열기',url}]]}});
 }
 
+async function renderAdditionNote(original,note){
+  const source=await sharp(original).rotate().png().toBuffer();
+  const {width,height}=await sharp(source).metadata();
+  const text=String(note||'').trim();
+  if(!text||text.length>220)throw new Error('추가할 내용을 220자 이내로 입력해 줘.');
+  const fontSize=Math.max(12,Math.min(22,Math.floor(width/27)));
+  const margin=16;
+  const charCount=Math.max(8,Math.floor((width-margin*2)/fontSize));
+  const chars=[...text],lines=[];
+  while(chars.length)lines.push(chars.splice(0,charCount).join(''));
+  const lineHeight=Math.ceil(fontSize*1.5);
+  const extra=80+lineHeight*lines.length;
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+extra+'"><rect width="100%" height="100%" fill="#f3f6fa"/><text x="16" y="32" font-size="16" font-weight="700" fill="#26354b" font-family="Noto Sans CJK KR,sans-serif">추가 내용</text>'+lines.map((line,i)=>'<text x="16" y="'+(62+i*lineHeight)+'" font-size="'+fontSize+'" fill="#26354b" font-family="Noto Sans CJK KR,sans-serif">'+esc(line)+'</text>').join('')+'</svg>';
+  const footer=await sharp(Buffer.from(svg)).png().toBuffer();
+  return sharp(source).extend({bottom:extra,background:'#ffffff'}).composite([{input:footer,left:0,top:height}]).png().toBuffer();
+}
 async function handle(update,base){
   const cb=update.callback_query;
+  if(cb?.data?.startsWith('imode:')){
+    const mode=cb.data.slice(6),chatId=cb.message?.chat?.id;
+    const state=sessions.get(chatId);
+    if(!state||Date.now()-state.created>ttl){
+      await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'이미지를 다시 올려 줘.',show_alert:true});return;
+    }
+    if(mode!=='edit'&&mode!=='add')return;
+    state.mode=mode;
+    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'작업 모드를 선택했어.'});
+    await send(chatId,mode==='edit'?'편집할 내용을 입력해 줘. 예: 일식 > 한식':'추가할 문구를 입력해 줘. 원본은 보존하고 편집본 하단에 추가 내용으로 표시해.');
+    return;
+  }
   if(cb?.data?.startsWith('im:')){
     const parts=cb.data.split(':');
     const key=String(cb.from.id);
@@ -332,14 +360,23 @@ async function handle(update,base){
   if(item){
     const buf=await download(item.file_id);
     await sharp(buf).metadata();
-    sessions.set(chatId,{buf,created:Date.now()});
+    sessions.set(chatId,{buf,created:Date.now(),mode:null});
     pending.delete(String(msg.from.id));
-    await send(chatId,'이미지를 받았어. 어디를 어떻게 수정할까? 짧게 말해도 돼.');
+    await tg('sendMessage',{chat_id:chatId,text:'이미지를 받았어. 원하는 작업을 선택해 줘.',reply_markup:{inline_keyboard:[[{text:'✏️ 편집',callback_data:'imode:edit'},{text:'📝 내용 추가',callback_data:'imode:add'}]]}});
     return;
   }
   if(!msg.text)return;
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
+  if(saved.mode==='add'){
+    await send(chatId,'추가 내용 이미지를 준비 중이야.');
+    try{
+      const output=await renderAdditionNote(saved.buf,msg.text);
+      await sendOriginalAndEdit(chatId,saved.buf,output);
+    }catch(e){await send(chatId,'내용 추가 실패: '+String(e.message).slice(0,200));}
+    return;
+  }
+  if(!saved.mode){await send(chatId,'먼저 편집 또는 내용 추가 버튼을 선택해 줘.');return;}
   const compact=msg.text.trim().match(/^([^\s>→]{1,50})\s+([^\s>→]{1,50})$/u);
   const changes=pairs(msg.text) || (compact && /\d/.test(compact[1]) && /\d/.test(compact[2]) ? [{from:compact[1],to:compact[2]}] : null);
   if(!changes){
