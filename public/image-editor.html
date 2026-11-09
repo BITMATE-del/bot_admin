@@ -69,11 +69,12 @@ function commitSelection(endPoint){
  let selected=selection(start,endPoint);
  const small=selected.w<5||selected.h<5;
  rect=small?editTapRect(endPoint):fitLongerReplacement(selected);
- const required=Math.ceil(Array.from(after.value).length*rect.h*.49);
- const tooNarrow=Array.from(after.value).length>Array.from(before.value).length&&rect.w<required;
- sub.disabled=rect.w<4||rect.h<4||tooNarrow;
- sel.textContent=tooNarrow?'바꿀 문구가 더 길어. 글자의 오른쪽 여백까지 선택해 줘.':
-   sub.disabled?'영역을 조금 더 크게 선택해 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
+ // The character-count width estimate is unreliable across Hangul, digits,
+ // proportional fonts and perspective. Let the image editor fit the text,
+ // and let output boundary QA reject actual clipping instead.
+ sub.disabled=rect.w<4||rect.h<4;
+ sel.textContent=sub.disabled?'영역을 조금 더 크게 선택해 줘.':
+   '위치가 선택됐어. 새 문구가 길어도 그대로 전송할 수 있어.';
  status.textContent=sub.disabled?'선택 영역을 확인해 줘.':
    '선택 완료 · '+rect.w+'×'+rect.h+'px · 전송 가능';
  active=false;start=null;draw();
