@@ -10,6 +10,7 @@ main{max-width:760px;margin:auto}.hint{color:#aab9cb}.panel{border:1px solid #30
 label{display:block;color:#cad7e8;font-size:13px}input{background:#0a1220;color:#fff;border:1px solid #456077;border-radius:8px;padding:10px;width:100%;font:inherit}
 button{border:0;border-radius:10px;padding:12px 14px;font:inherit;font-weight:650;background:#2d71e8;color:white;cursor:pointer;width:100%}
 button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{min-height:24px;color:#d1e1ff;margin-top:12px}
+#submit{white-space:normal;overflow-wrap:anywhere;line-height:1.4;min-height:52px}
 .progress-panel{margin-top:14px;padding:12px;border:1px solid #304058;border-radius:10px;background:#0d1728}
 .progress-top{display:flex;justify-content:space-between;gap:12px;color:#e3edfc;font-size:14px;margin-bottom:10px}
 .progress-track{height:10px;border-radius:99px;overflow:hidden;background:#29374f}
@@ -44,9 +45,26 @@ function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
 }
 function point(e){const b=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(canvas.width,(e.clientX-b.left)*canvas.width/b.width)),y:Math.max(0,Math.min(canvas.height,(e.clientY-b.top)*canvas.height/b.height))}}
 function selection(a,b){return{x:Math.round(Math.min(a.x,b.x)),y:Math.round(Math.min(a.y,b.y)),w:Math.round(Math.abs(a.x-b.x)),h:Math.round(Math.abs(a.y-b.y))}}
+function normalizeAdditionRect(box){
+ const minW=Math.min(canvas.width,Math.max(96,Math.min(260,40+Array.from(after.value).length*11)));
+ const minH=Math.min(canvas.height,Math.max(68,Math.min(150,50+Math.ceil(Array.from(after.value).length/16)*22)));
+ const w=Math.min(canvas.width,Math.max(minW,box.w)),h=Math.min(canvas.height,Math.max(minH,box.h));
+ return {x:Math.min(Math.max(0,box.x),canvas.width-w),y:Math.min(Math.max(0,box.y),canvas.height-h),w,h};
+}
 canvas.addEventListener('pointerdown',e=>{if(!image.complete||!image.naturalWidth){status.textContent='원본 이미지 로딩이 끝나지 않았어. 사진이 보이는지 확인해 줘.';return;}e.preventDefault();start=point(e);active=true;canvas.setPointerCapture(e.pointerId);rect=null;sub.disabled=true;});
 canvas.addEventListener('pointermove',e=>{if(!active)return;e.preventDefault();rect=selection(start,point(e));draw()});
-canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();active=false;rect=selection(start,point(e));const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);sub.disabled=!rect||(currentMode==='add'?(rect.w<96||rect.h<48):(rect.w<4||rect.h<4||narrow));sel.textContent=narrow?'변경할 글자가 더 길어. 글자 양옆의 여유 공간까지 넓게 선택해 줘.':sub.disabled?'선택 영역을 조금 더 크게 잡아 줘.':'선택한 위치가 정확한지 확인하고 전송해 줘.';draw()});
+canvas.addEventListener('pointerup',e=>{
+ if(!active)return;e.preventDefault();active=false;
+ rect=selection(start,point(e));
+ if(currentMode==='add')rect=normalizeAdditionRect(rect);
+ const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;
+ const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);
+ sub.disabled=!rect||(currentMode==='add'?rect.w<96||rect.h<48:rect.w<4||rect.h<4||narrow);
+ sel.textContent=currentMode==='add'
+  ?(sub.disabled?'이미지가 너무 작아 내용을 추가할 공간이 부족해.':'위치가 선택됐어. 아래 파란 버튼을 눌러 전송해 줘.')
+  :(narrow?'변경할 글자가 더 길어. 글자 양옆의 여유 공간까지 넓게 선택해 줘.':sub.disabled?'선택 영역을 조금 더 크게 잡아 줘.':'선택한 위치가 정확한지 확인하고 전송해 줘.');
+ draw();
+});
 document.getElementById('clear').addEventListener('click',()=>{rect=null;sub.disabled=true;sel.textContent='선택 다시 하기: 숫자를 감싸 줘.';draw()});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const panel=document.getElementById('progressPanel');
@@ -138,7 +156,7 @@ try{
   document.querySelector('label:has(#after)').firstChild.textContent='추가할 내용';
   document.getElementById('angle').parentElement.style.display='none';
   sub.textContent='지정한 위치에 내용 추가 후 텔레그램으로 보내기';
-  sel.textContent='내용이 잘리지 않도록 충분한 가로·세로 공간을 선택해 줘.';
+  sel.textContent='이미지를 한 번 터치하거나 드래그해 위치를 지정해 줘. 작은 선택은 필요한 크기로 자동 확대돼.';
  }
  const sourcePath='/api/image-job/'+encodeURIComponent(job)+'/original';
  document.getElementById('sourceFileLink').href=sourcePath;
