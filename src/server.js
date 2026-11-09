@@ -413,7 +413,20 @@ app.get('/health',(_req,res)=>res.json({status:'ok'}));
 app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)),'../public')));
 app.use((e,req,res,next)=>{console.error(e);res.status(400).json({error:e.message||'요청 실패'})});
 await init();const me=await tg('getMe');await tg('setWebhook',{url:base+'/telegram/webhook',secret_token:process.env.WEBHOOK_SECRET,allowed_updates:['message','edited_message','chat_member','my_chat_member'],drop_pending_updates:false});app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Admin bot started @'+me.username));
-startImageBot().catch(e=>console.error('image bot webhook setup:',e.message));
+async function ensureImageBotWebhook(){
+  for(let attempt=1;;attempt++){
+    try{
+      await startImageBot();
+      console.log('Image editor bot webhook ready');
+      return;
+    }catch(e){
+      const delay=Math.min(60000,5000*Math.min(attempt,12));
+      console.error('image bot webhook setup attempt '+attempt+': '+String(e.message||e)+'; retrying in '+Math.round(delay/1000)+'s');
+      await new Promise(resolve=>setTimeout(resolve,delay));
+    }
+  }
+}
+ensureImageBotWebhook().catch(e=>console.error('image bot webhook fatal:',e));
 reconcileGroups().catch(e=>console.error('startup membership reconciliation:',e.message));
 setInterval(()=>reconcileGroups().catch(e=>console.error('scheduled membership reconciliation:',e.message)),300000).unref();
 setInterval(()=>{for(const [id,v] of limits)if(v.every(t=>now()-t>600000))limits.delete(id);pool.query("DELETE FROM update_dedup WHERE created_at < NOW() - interval '7 days'").catch(console.error);pool.query('DELETE FROM admin_sessions WHERE expires_at<NOW()').catch(console.error)},3600000).unref();
