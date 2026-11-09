@@ -2,10 +2,12 @@ import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
 import { reviseDesignRegion, editWholeImage, interpretImageRequest } from './ai-image-design.js';
+import { generateWorkTemplate } from './document-template.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
 const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId) + '&v=20261109-4';
+const documentTemplateUrl = jobId => editorOrigin + '/document-template.html?job=' + encodeURIComponent(jobId);
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
@@ -375,7 +377,7 @@ async function handle(update,base){
     if(mode!=='edit'&&mode!=='add')return;
     state.mode=mode;
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'작업 모드를 선택했어.'});
-    await send(chatId,mode==='edit'?'편집할 내용을 입력해 줘. 예: 일식 > 한식':'추가할 문구를 입력해 줘. 다음 단계에서 이미지 안의 표시 위치를 직접 선택할 수 있어.');
+    await send(chatId,mode==='edit'?'편집할 내용을 입력해 줘. 예: 일식 > 한식':'새 문서를 만들게. 진행 일정이나 작성할 내용을 입력해 줘. 다음 화면에서 다른 항목도 수정할 수 있어.');
     return;
   }
   if(cb?.data?.startsWith('im:')){
@@ -425,11 +427,12 @@ async function handle(update,base){
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
   if(saved.mode==='add'){
     const note=msg.text.trim();
-    if(!note||note.length>180){await send(chatId,'추가할 문구를 180자 이내로 입력해 줘.');return;}
+    if(!note||note.length>180){await send(chatId,'입력할 내용을 180자 이내로 보내 줘.');return;}
     const id=makeManualJob(chatId,saved.buf,{from:'',to:note});
-    const job=manualJobs.get(id);job.mode='add';
-    await send(chatId,'추가할 문구를 받았어. 아래 링크에서 위치를 사각형으로 지정해 줘.\\n'+editorUrl(id));
-    await sendManualLink(chatId,id,base);
+    const job=manualJobs.get(id);job.mode='template';
+    const url=documentTemplateUrl(id);
+    await tg('sendMessage',{chat_id:chatId,text:'새 문서 양식 준비 완료. 아래에서 진행 사유·일정 등을 입력하고 미리보기 후 생성해 줘.\\n'+url,
+      reply_markup:{inline_keyboard:[[{text:'📝 새 문서 양식 작성',url}]]}});
     return;
   }
   if(!saved.mode){await send(chatId,'먼저 편집 또는 내용 추가 버튼을 선택해 줘.');return;}
@@ -470,6 +473,35 @@ export function mountImageBot(app,base){
     if(!job||Date.now()-job.created>ttl)return null;
     return job;
   };
+  app.get('/api/document-job/:id/info',(req,res)=>{
+    const job=getManual(req);
+    if(!job||job.mode!=='template')return res.status(404).json({error:'문서 작업이 만료됐어.'});
+    res.set('Cache-Control','no-store').json({initialText:job.change.to,done:!!job.generated});
+  });
+  app.post('/api/document-job/:id/generate',async(req,res)=>{
+    const job=getManual(req);
+    if(!job||job.mode!=='template')return res.status(404).json({error:'문서 작업이 만료됐어.'});
+    if(job.busy)return res.status(409).json({error:'이미 문서를 전송하는 중이야.'});
+    if(job.generated)return res.json({ok:true,done:true});
+    job.busy=true;
+    try{
+      const png=await generateWorkTemplate(req.body||{});
+      const form=new FormData();
+      form.append('chat_id',String(job.chatId));
+      form.append('document',new Blob([png],{type:'image/png'}),'new-work-document.png');
+      form.append('caption','새로 작성한 업무 문서 · 원본 이미지와 별개의 새 양식');
+      const response=await fetch('https://api.telegram.org/bot'+token+'/sendDocument',{
+        method:'POST',body:form,signal:AbortSignal.timeout(45000)
+      });
+      const data=await response.json();
+      if(!data.ok)throw new Error(data.description||'문서 전송 실패');
+      job.generated=true;
+      res.json({ok:true,done:true});
+    }catch(e){
+      console.error('template generation failed:',e.message);
+      res.status(400).json({error:String(e.message||e).slice(0,200)});
+    }finally{job.busy=false}
+  });
   app.get('/api/image-job/:id/info',async(req,res)=>{
     const job=getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
     try{
