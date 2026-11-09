@@ -293,7 +293,7 @@ async function sendManualLink(chatId,jobId,base){
   await tg('sendMessage',{chat_id:chatId,text:'수정할 글자의 위치를 직접 선택할 수 있어. 아래 첫 버튼은 텔레그램 내부 화면, 두 번째는 외부 브라우저로 열어. 열리지 않으면 주소를 복사해서 크롬에 붙여넣어 줘. (30분 유효)\n\n'+url,disable_web_page_preview:true,reply_markup:{inline_keyboard:[[{text:'✏️ 텔레그램에서 위치 선택',web_app:{url}}],[{text:'🌐 브라우저로 열기',url}]]}});
 }
 
-async function addLabeledNoteAtPosition(original,note,selection){
+async function addLabeledNoteAtPosition(original,note,selection,style={}){
   const source=await sharp(original).rotate().png().toBuffer();
   const {width:W,height:H}=await sharp(source).metadata();
   const {x,y,w,h}=selection;
@@ -304,24 +304,32 @@ async function addLabeledNoteAtPosition(original,note,selection){
   // predominantly light, document-like background. Never overwrite content.
   const sampled=await sharp(source).extract({left:x,top:y,width:w,height:h})
     .removeAlpha().raw().toBuffer({resolveWithObject:true});
-  let light=0,dark=0,mid=0;
-  for(let i=0;i<sampled.data.length;i+=sampled.info.channels){
-    const r=sampled.data[i],g=sampled.data[i+1],b=sampled.data[i+2];
-    const brightest=Math.max(r,g,b),lowest=Math.min(r,g,b);
-    if(lowest>=210)light++;
-    if(brightest<=165)dark++;
-    if(lowest<210&&brightest>165)mid++;
+  // Ignore soft/tinted background decoration. Block only dense, high
+  // contrast dark marks likely to be existing lettering on a light panel.
+  const pixels=sampled.data,channels=sampled.info.channels;
+  let light=0,dark=0,denseRows=0;
+  for(let yy=0;yy<h;yy++){
+    let rowDark=0;
+    for(let xx=0;xx<w;xx++){
+      const i=(yy*w+xx)*channels;
+      const r=pixels[i],g=pixels[i+1],b=pixels[i+2];
+      if(Math.min(r,g,b)>207)light++;
+      if(Math.max(r,g,b)<145 && Math.max(r,g,b)-Math.min(r,g,b)<32){
+        dark++;rowDark++;
+      }
+    }
+    if(rowDark>=Math.max(3,Math.ceil(w*.045)))denseRows++;
   }
-  const n=w*h;
-  if(light/n>.68 && dark/n>.0025 && dark>=3){
-    throw new Error('선택한 위치에 기존 글자가 있어. 원본을 가리지 않도록 빈 공간을 선택해 줘.');
-  }
-  if(light/n<=.68 && (dark+mid)/n>.42){
-    throw new Error('선택 영역에 기존 이미지 내용이 많아. 빈 공간을 선택해 줘.');
+  if(light/(w*h)>.62&&dark>Math.max(7,w*h*.006)&&denseRows>=Math.max(3,Math.floor(h*.10))){
+    throw new Error('기존 글자 위에 겹칠 수 있어. 원본 글자를 가리지 않는 빈 공간을 선택해 줘.');
   }
   const text=String(note||'').trim();
   if(!text||text.length>180)throw new Error('추가할 문구를 180자 이내로 입력해 줘.');
-  const fontSize=Math.min(20,Math.max(9,Math.min(Math.floor((h-22)/2),Math.floor((w-20)/Math.max(1,Array.from(text).length)))));
+  const allowedFonts={noto:'Noto Sans CJK KR,sans-serif',serif:'Noto Serif CJK KR,serif',system:'DejaVu Sans,sans-serif'};
+  const fontFamily=allowedFonts[style.font]||allowedFonts.noto;
+  const requestedSize=Number(style.size);
+  const autoSize=Math.min(20,Math.max(9,Math.min(Math.floor((h-22)/2),Math.floor((w-20)/Math.max(1,Array.from(text).length)))));
+  const fontSize=Number.isInteger(requestedSize)&&requestedSize>=9&&requestedSize<=24?requestedSize:autoSize;
   const lineHeight=Math.ceil(fontSize*1.3);
   const columnWidth=Math.max(1,w-20);
   const maxChars=Math.max(1,Math.floor(columnWidth/fontSize));
@@ -335,7 +343,7 @@ async function addLabeledNoteAtPosition(original,note,selection){
     '<rect width="'+w+'" height="'+h+'" rx="5" fill="#f3f7ff" stroke="#4269ad" stroke-width="2"/>'+
     '<rect x="0" y="0" width="'+w+'" height="'+header+'" rx="5" fill="#4269ad"/>'+
     '<text x="9" y="'+Math.round(header*.72)+'" font-size="'+Math.max(12,Math.floor(header*.65))+'" font-weight="bold" font-family="Noto Sans CJK KR,sans-serif" fill="#ffffff">추가 내용</text>'+
-    lines.map((line,i)=>'<text x="10" y="'+Math.round(header+fontSize+2+i*lineHeight)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,sans-serif" fill="#182d50">'+esc(line)+'</text>').join('')+
+    lines.map((line,i)=>'<text x="10" y="'+Math.round(header+fontSize+2+i*lineHeight)+'" font-size="'+fontSize+'" font-family="'+fontFamily+'" fill="#182d50">'+esc(line)+'</text>').join('')+
     '</svg>';
   const label=await sharp(Buffer.from(svg)).png().toBuffer();
   return sharp(source).composite([{input:label,left:x,top:y}]).png().toBuffer();
@@ -529,7 +537,7 @@ export function mountImageBot(app,base){
       try{
         job.state='editing';
         const output=job.mode==='add'
-          ? await addLabeledNoteAtPosition(job.buf,job.change.to,values)
+          ? await addLabeledNoteAtPosition(job.buf,job.change.to,values,{font:req.body?.font,size:req.body?.fontSize})
           : await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
         job.state='verifying';
         await verifyOutputFile(job.buf,output);
