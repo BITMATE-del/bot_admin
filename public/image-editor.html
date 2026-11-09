@@ -43,21 +43,19 @@ let rect=null,start=null,active=false;const image=document.getElementById('sourc
 function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
  if(rect){ctx.fillStyle='rgba(239,54,64,.13)';ctx.fillRect(rect.x,rect.y,rect.w,rect.h);ctx.strokeStyle='#ff3b45';ctx.lineWidth=Math.max(2,canvas.width/230);ctx.strokeRect(rect.x,rect.y,rect.w,rect.h);}
 }
-function point(e){const b=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(canvas.width,(e.clientX-b.left)*canvas.width/b.width)),y:Math.max(0,Math.min(canvas.height,(e.clientY-b.top)*canvas.height/b.height))}}
+function point(e){const b=image.getBoundingClientRect();return{x:Math.max(0,Math.min(image.naturalWidth,(e.clientX-b.left)*image.naturalWidth/b.width)),y:Math.max(0,Math.min(image.naturalHeight,(e.clientY-b.top)*image.naturalHeight/b.height))}}
 function selection(a,b){return{x:Math.round(Math.min(a.x,b.x)),y:Math.round(Math.min(a.y,b.y)),w:Math.round(Math.abs(a.x-b.x)),h:Math.round(Math.abs(a.y-b.y))}}
-function normalizeAdditionRect(box){
- // Use compact bounds for short annotations. Never silently expand to a
- // much larger area just because the entered text has one more character.
+function normalizeAdditionRect(box,tapped=false){
  const length=Array.from(after.value.trim()).length;
- const minimumW=Math.min(canvas.width,Math.max(70,Math.min(190,25+length*10)));
- const minimumH=Math.min(canvas.height,46);
- const w=Math.min(canvas.width,Math.max(minimumW,box.w));
- const h=Math.min(canvas.height,Math.max(minimumH,box.h));
- return {
-  x:Math.max(0,Math.min(box.x,canvas.width-w)),
-  y:Math.max(0,Math.min(box.y,canvas.height-h)),
-  w,h
- };
+ const minW=Math.min(canvas.width,Math.max(70,Math.min(190,25+length*10)));
+ const minH=Math.min(canvas.height,46);
+ // A drag preserves the selected top-left point; a tap is the CENTER of a new box.
+ const w=Math.min(canvas.width,Math.max(minW,box.w));
+ const h=Math.min(canvas.height,Math.max(minH,box.h));
+ const x=tapped?box.x-w/2:box.x;
+ const y=tapped?box.y-h/2:box.y;
+ return {x:Math.round(Math.max(0,Math.min(x,canvas.width-w))),
+  y:Math.round(Math.max(0,Math.min(y,canvas.height-h))),w:Math.round(w),h:Math.round(h)};
 }
 function selectedAreaIsOccupied(r){
  if(!r||currentMode!=='add')return false;
@@ -88,18 +86,18 @@ function fitLongerReplacement(box){
 function finalizeSelection(endPoint){
  if(!start){start=endPoint;}
  rect=selection(start,endPoint);
- if(currentMode==='add')rect=normalizeAdditionRect(rect);
+ const tapped=rect.w<8&&rect.h<8;
+ if(currentMode==='add')rect=normalizeAdditionRect(rect,tapped);
  else rect=fitLongerReplacement(rect);
  const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;
  const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);
  const occupied=selectedAreaIsOccupied(rect);
- if(currentMode==='add' && rect && (rect.w<70||rect.h<46)){
-   status.textContent='원본 이미지가 너무 작아 표시 영역을 만들 수 없어. 더 큰 원본 이미지를 올려 줘.';
- }
- const invalid=currentMode==='add'?rect.w<70||rect.h<46||occupied:rect.w<4||rect.h<4||narrow;
+ // The local color heuristic is only a warning. Let the backend check
+ // actual source pixels; false positives must not disable the submit button.
+ const invalid=currentMode==='add'?rect.w<70||rect.h<46:rect.w<4||rect.h<4||narrow;
  sub.disabled=invalid;
- sel.textContent=occupied?'기존 글자나 이미지와 겹쳐. 빈 공간을 다시 선택해 줘.':narrow?'새 문구가 길어. 원본 글자 오른쪽 여백까지 선택해 줘.':invalid?'영역을 조금 더 크게 잡아 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
- status.textContent=occupied?'겹침 감지 · 원본 내용 보호 중':invalid?'영역 크기를 확인해 줘.':'선택 완료 · 전송할 수 있어.';
+ sel.textContent=invalid?'영역을 조금 더 크게 선택해 줘.':occupied?'위치 선택 완료. 기존 글자와 겹칠 수 있으니 확인 후 전송해 줘.':'선택한 위치가 맞으면 파란 버튼을 눌러 전송해 줘.';
+ status.textContent=invalid?'선택 영역 크기를 확인해 줘.':occupied?'겹침 가능성 안내 · 전송하면 서버에서 최종 확인해.':'선택 완료 · 전송할 수 있어.';
  active=false;start=null;draw();
 }
 canvas.addEventListener('pointerdown',e=>{
@@ -112,11 +110,15 @@ canvas.addEventListener('pointerdown',e=>{
 canvas.addEventListener('pointermove',e=>{if(!active)return;e.preventDefault();rect=selection(start,point(e));draw()});
 canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();finalizeSelection(point(e))});
 canvas.addEventListener('pointercancel',e=>{if(!active)return;finalizeSelection(point(e))});
-canvas.addEventListener('click',e=>{
- if(currentMode==='add'&&!active&&sub.disabled&&image.naturalWidth){
-  const p=point(e);start=p;finalizeSelection(p);
- }
-});
+// Do not process the synthetic click after pointerup; it used to move the
+// selection unexpectedly and disable the button again on mobile.
+if(!('PointerEvent' in window)){
+ canvas.addEventListener('click',e=>{
+  if(currentMode==='add'&&image.naturalWidth){
+   const p=point(e);start=p;finalizeSelection(p);
+  }
+ });
+}
 document.getElementById('clear').addEventListener('click',()=>{rect=null;sub.disabled=true;sel.textContent='선택 다시 하기: 숫자를 감싸 줘.';draw()});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const panel=document.getElementById('progressPanel');
