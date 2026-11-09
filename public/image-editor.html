@@ -46,7 +46,6 @@ function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
 function point(e){const b=image.getBoundingClientRect();return{x:Math.max(0,Math.min(image.naturalWidth,(e.clientX-b.left)*image.naturalWidth/b.width)),y:Math.max(0,Math.min(image.naturalHeight,(e.clientY-b.top)*image.naturalHeight/b.height))}}
 function selection(a,b){return{x:Math.round(Math.min(a.x,b.x)),y:Math.round(Math.min(a.y,b.y)),w:Math.round(Math.abs(a.x-b.x)),h:Math.round(Math.abs(a.y-b.y))}}
 function fitLongerReplacement(box){
- if(currentMode!=='edit')return box;
  const oldLength=Array.from(before.value).length;
  const newLength=Array.from(after.value).length;
  if(newLength<=oldLength||!box||box.w<4||box.h<4)return box;
