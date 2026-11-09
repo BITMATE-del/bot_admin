@@ -46,10 +46,18 @@ function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
 function point(e){const b=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(canvas.width,(e.clientX-b.left)*canvas.width/b.width)),y:Math.max(0,Math.min(canvas.height,(e.clientY-b.top)*canvas.height/b.height))}}
 function selection(a,b){return{x:Math.round(Math.min(a.x,b.x)),y:Math.round(Math.min(a.y,b.y)),w:Math.round(Math.abs(a.x-b.x)),h:Math.round(Math.abs(a.y-b.y))}}
 function normalizeAdditionRect(box){
- const minW=Math.min(canvas.width,Math.max(96,Math.min(260,40+Array.from(after.value).length*11)));
- const minH=Math.min(canvas.height,Math.max(68,Math.min(150,50+Math.ceil(Array.from(after.value).length/16)*22)));
- const w=Math.min(canvas.width,Math.max(minW,box.w)),h=Math.min(canvas.height,Math.max(minH,box.h));
- return {x:Math.min(Math.max(0,box.x),canvas.width-w),y:Math.min(Math.max(0,box.y),canvas.height-h),w,h};
+ // Use compact bounds for short annotations. Never silently expand to a
+ // much larger area just because the entered text has one more character.
+ const length=Array.from(after.value.trim()).length;
+ const minimumW=Math.min(canvas.width,Math.max(70,Math.min(190,25+length*10)));
+ const minimumH=Math.min(canvas.height,46);
+ const w=Math.min(canvas.width,Math.max(minimumW,box.w));
+ const h=Math.min(canvas.height,Math.max(minimumH,box.h));
+ return {
+  x:Math.max(0,Math.min(box.x,canvas.width-w)),
+  y:Math.max(0,Math.min(box.y,canvas.height-h)),
+  w,h
+ };
 }
 function selectedAreaIsOccupied(r){
  if(!r||currentMode!=='add')return false;
@@ -75,7 +83,10 @@ function finalizeSelection(endPoint){
  const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;
  const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);
  const occupied=selectedAreaIsOccupied(rect);
- const invalid=currentMode==='add'?rect.w<96||rect.h<48||occupied:rect.w<4||rect.h<4||narrow;
+ if(currentMode==='add' && rect && (rect.w<70||rect.h<46)){
+   status.textContent='원본 이미지가 너무 작아 표시 영역을 만들 수 없어. 더 큰 원본 이미지를 올려 줘.';
+ }
+ const invalid=currentMode==='add'?rect.w<70||rect.h<46||occupied:rect.w<4||rect.h<4||narrow;
  sub.disabled=invalid;
  sel.textContent=occupied?'기존 글자나 이미지와 겹쳐. 빈 공간을 다시 선택해 줘.':invalid?'영역을 조금 더 크게 잡아 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
  status.textContent=occupied?'겹침 감지 · 원본 내용 보호 중':invalid?'영역 크기를 확인해 줘.':'선택 완료 · 전송할 수 있어.';
