@@ -321,7 +321,7 @@ async function addLabeledNoteAtPosition(original,note,selection){
   }
   const text=String(note||'').trim();
   if(!text||text.length>180)throw new Error('추가할 문구를 180자 이내로 입력해 줘.');
-  const fontSize=Math.min(20,Math.max(9,Math.floor((h-22)/2)));
+  const fontSize=Math.min(20,Math.max(9,Math.min(Math.floor((h-22)/2),Math.floor((w-20)/Math.max(1,Array.from(text).length)))));
   const lineHeight=Math.ceil(fontSize*1.3);
   const columnWidth=Math.max(1,w-20);
   const maxChars=Math.max(1,Math.floor(columnWidth/fontSize));
