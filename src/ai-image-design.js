@@ -117,20 +117,27 @@ function assessLabelConsistency(original,edited,w,h){
   if(borderVar/border.length>13)return null;
   const sample=(bytes)=>{
     let count=0,sumX=0,sumY=0,sumBrightness=0;
+    let sumR=0,sumG=0,sumB=0,minY=h,maxY=-1;
     for(let y=0;y<h;y++)for(let x=0;x<w;x++){
       const i=(y*w+x)*4;
       const r=bytes[i],g=bytes[i+1],b=bytes[i+2];
       if(colorDistance(r,g,b)<32)continue;
       count++;sumX+=x;sumY+=y;sumBrightness+=(r+g+b)/3;
+      sumR+=r;sumG+=g;sumB+=b;minY=Math.min(minY,y);maxY=Math.max(maxY,y);
     }
-    return count?{count,x:sumX/count,y:sumY/count,brightness:sumBrightness/count}:null;
+    return count?{count,x:sumX/count,y:sumY/count,brightness:sumBrightness/count,
+      color:[sumR/count,sumG/count,sumB/count],height:maxY-minY+1}:null;
   };
   const a=sample(original),b=sample(edited);
   if(!a||a.count<n*.012||a.count>n*.4)return null;
   if(!b)return '편집 영역에서 글자 형태가 사라졌어.';
   const density=b.count/a.count;
   if(density<.45||density>2.2)return '수정본 글자의 전체 획 밀도가 원본과 크게 달라.';
-  if(Math.abs(a.brightness-b.brightness)>38)return '수정본 글자 색상 명도가 원본과 크게 달라.';
+  if(Math.abs(a.brightness-b.brightness)>30)return '수정본 글자 색상 명도가 원본과 크게 달라.';
+  const colorShift=Math.max(...a.color.map((v,i)=>Math.abs(v-b.color[i])));
+  if(colorShift>40)return '수정본의 글자 색상이 원본과 크게 달라.';
+  const heightRatio=b.height/a.height;
+  if(heightRatio<.8||heightRatio>1.2)return '수정본 글자 크기가 원본과 크게 달라.';
   if(Math.abs(a.y-b.y)>Math.max(3,h*.18)||Math.abs(a.x-b.x)>Math.max(4,w*.17)){
     return '수정본 글자의 기준 위치가 원본과 크게 달라.';
   }
@@ -273,7 +280,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     if(attempt===0){
       console.warn('image label quality retry:',mismatch);
       return reviseDesignRegion(sourceBuffer,selection,
-        instruction+' Ensure design label legibility and retain the same baseline, scale, color and stroke weight as the source label.',1);
+        instruction+' Preserve the source label height, RGB color, glyph density and vertical alignment. Do not upscale or recolor the label.',1);
     }
     throw new Error('텍스트 스타일 검수 실패: '+mismatch+' 원본은 유지했어.');
   }
