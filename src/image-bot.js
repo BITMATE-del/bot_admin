@@ -6,7 +6,7 @@ import { createImageCredits } from './image-credits.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
-const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId) + '&v=20261109-4';
+const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId) + '&v=20261109-5';
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
