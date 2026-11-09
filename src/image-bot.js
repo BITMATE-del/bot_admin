@@ -296,13 +296,13 @@ async function sendManualLink(chatId,jobId,base){
 
 async function sendBalance(chatId,uid,credits,heading='사용 가능 횟수'){
   const b=await credits.status(uid);
-  await send(chatId,'🎫 '+heading+'\\n고유 UID: '+b.uid+'\\n무료 체험: '+b.trial_left+'/'+b.trial_total+'회\\n충전 잔여: '+b.paid_left+'회\\n전체 잔여: '+b.remaining+'회\\n완료한 편집: '+b.used+'회\\n※ 편집 완료 후 전송에 성공한 경우만 차감돼.');
+  await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 체험: '+b.trial_left+'/'+b.trial_total+'회\n충전 잔여: '+b.paid_left+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 편집 완료 후 전송에 성공한 경우만 차감돼.');
   return b;
 }
 async function obtainCredit(chatId,uid,credits,source){
   const reserved=await credits.reserve(uid,source);
   if(!reserved.ok){
-    await send(chatId,'무료 체험 횟수를 모두 사용했어.\\n현재 남은 편집 횟수: 0회\\n충전 기능은 추후 제공될 예정이야. /잔여횟수 로 확인할 수 있어.');
+    await send(chatId,'무료 체험 횟수를 모두 사용했어.\n현재 남은 편집 횟수: 0회\n충전 기능은 추후 제공될 예정이야. /잔여횟수 로 확인할 수 있어.');
     return null;
   }
   return reserved.id;
@@ -342,7 +342,7 @@ async function handle(update,base,credits){
       await sendBalance(job.chatId,cb.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
     } catch(error) {
       await credits.release(creditId).catch(console.error);
-      await send(job.chatId,'AI 편집 실패: '+error.message+'\\n편집 실패 시 이용권은 차감되지 않아.');
+      await send(job.chatId,'AI 편집 실패: '+error.message+'\n편집 실패 시 이용권은 차감되지 않아.');
     }
     return;
   }
@@ -350,7 +350,7 @@ async function handle(update,base,credits){
   if(!msg||msg.chat?.type!=='private')return;
   const chatId=msg.chat.id;
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'📸 포토샵봇\\n이미지를 올리고 바꾸고 싶은 부분을 말해 줘.\\n예: 일식 > 한식\\n\\n/잔여횟수 - 체험·충전 잔여 횟수\\n/내UID - 고유 UID 확인');
+    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꾸고 싶은 부분을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 체험·충전 잔여 횟수\n/내UID - 고유 UID 확인');
     await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
     return;
   }
@@ -359,7 +359,7 @@ async function handle(update,base,credits){
     return;
   }
   if(['/내UID','/uid'].includes(msg.text?.trim())){
-    await send(chatId,'고유 UID: '+msg.from.id+'\\n이 UID를 기준으로 무료 체험 횟수가 관리돼.');
+    await send(chatId,'고유 UID: '+msg.from.id+'\n이 UID를 기준으로 무료 체험 횟수가 관리돼.');
     return;
   }
   const item=msg.photo?.at(-1)||((msg.document?.mime_type||'').startsWith('image/')?msg.document:null);
@@ -370,7 +370,7 @@ async function handle(update,base,credits){
     pending.delete(String(msg.from.id));
     const balance=await credits.status(msg.from.id);
     await send(chatId,balance.remaining>0
-      ?'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\\n🎫 잔여 편집 횟수: '+balance.remaining+'회'
+      ?'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\n🎫 잔여 편집 횟수: '+balance.remaining+'회'
       :'이미지를 받았지만 이용 가능한 편집 횟수가 없어. /잔여횟수 로 확인해 줘.');
     return;
   }
@@ -393,7 +393,7 @@ async function handle(update,base,credits){
       await sendBalance(chatId,msg.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
     } catch(e) {
       await credits.release(creditId).catch(console.error);
-      await send(chatId,'AI 편집 실패: '+String(e.message).slice(0,210)+'\\n편집 실패 시 이용권은 차감되지 않아.');
+      await send(chatId,'AI 편집 실패: '+String(e.message).slice(0,210)+'\n편집 실패 시 이용권은 차감되지 않아.');
     }
     return;
   }
