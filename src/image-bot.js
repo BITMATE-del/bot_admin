@@ -262,9 +262,9 @@ async function download(fileId){
   return Buffer.from(arr);
 }
 
-function makeManualJob(chatId,buf,change){
+function makeManualJob(chatId,buf,change,uid){
   const id=crypto.randomBytes(16).toString('hex');
-  manualJobs.set(id,{id,chatId,buf,change,created:Date.now(),busy:false});
+  manualJobs.set(id,{id,chatId,uid:String(uid),buf,change,created:Date.now(),busy:false});
   return id;
 }
 async function manualEdit(buf,{x,y,w,h,after,angle}){
@@ -321,7 +321,9 @@ async function handle(update,base,credits){
     if(parts[1]==='no'){pending.delete(key);await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'취소했어. 원본은 수정하지 않았어.'});await send(job.chatId,'수정을 취소했어. 수정 위치가 정확하지 않다면 해당 글자 부분을 확대해서 새 이미지로 올려줘.');return;}
     if(parts[1]!=='ok')return;
     pending.delete(key);
-    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'확인했어. 수정 이미지를 전송할게.'});
+    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'확인했어. 편집을 시작할게.'});
+    const creditId=await obtainCredit(job.chatId,cb.from.id,credits,'ocr_confirm');
+    if(!creditId)return;
     try {
       const region=job.regions?.[0];
       if(!region)throw new Error('자동으로 찾은 수정 영역이 없어. 브라우저에서 직접 선택해 줘.');
@@ -336,7 +338,12 @@ async function handle(update,base,credits){
       }
       const output=await reviseDesignRegion(job.buf,{x,y,w:right-x,h:bottom-y},'Edit the selected design region only. '+job.change.from+' to '+job.change.to+'. Preserve surrounding visual context.');
       await sendOriginalAndEdit(job.chatId,job.buf,output);
-    } catch(error) { await send(job.chatId,'AI 편집 실패: '+error.message); }
+      await credits.consume(creditId);
+      await sendBalance(job.chatId,cb.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
+    } catch(error) {
+      await credits.release(creditId).catch(console.error);
+      await send(job.chatId,'AI 편집 실패: '+error.message+'\\n편집 실패 시 이용권은 차감되지 않아.');
+    }
     return;
   }
   const msg=update.message;
@@ -375,18 +382,27 @@ async function handle(update,base,credits){
   if(!changes){
     const request=msg.text.trim();
     if(!request.length||request.length>300) {await send(chatId,'어떤 부분을 어떻게 수정할지 짧게 말해 줘.');return;}
-    await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
+    const creditId=await obtainCredit(chatId,msg.from.id,credits,'whole_image');
+    if(!creditId)return;
+    await tg('sendChatAction',{chat_id:chatId,action:'upload_document'}).catch(()=>{});
     try {
       const instruction=await interpretImageRequest(saved.buf,request);
       const result=await editWholeImage(saved.buf,instruction);
       await sendOriginalAndEdit(chatId,saved.buf,result);
-    } catch(e) {await send(chatId,'AI 편집 실패: '+String(e.message).slice(0,240));}
+      await credits.consume(creditId);
+      await sendBalance(chatId,msg.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
+    } catch(e) {
+      await credits.release(creditId).catch(console.error);
+      await send(chatId,'AI 편집 실패: '+String(e.message).slice(0,210)+'\\n편집 실패 시 이용권은 차감되지 않아.');
+    }
     return;
   }
   if(changes.length>1) {await send(chatId,'현재 정밀 영역 수정은 한 번에 한 곳씩 지원해. 첫 번째 변경부터 진행해 줘.');return;}
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
   await send(chatId,'요청을 받았어. 이미지 위치를 확인하고 있어.');
-  const manualId=makeManualJob(chatId,saved.buf,changes[0]);
+  const balance=await credits.status(msg.from.id);
+  if(balance.remaining<1){await send(chatId,'체험 횟수를 모두 사용했어. /잔여횟수 로 확인해 줘.');return;}
+  const manualId=makeManualJob(chatId,saved.buf,changes[0],msg.from.id);
   try{
     const {output,preview,regions}=await replaceText(saved.buf,changes);
     const id=crypto.randomBytes(8).toString('hex');
