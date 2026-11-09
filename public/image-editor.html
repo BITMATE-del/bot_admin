@@ -51,16 +51,34 @@ function normalizeAdditionRect(box){
  const w=Math.min(canvas.width,Math.max(minW,box.w)),h=Math.min(canvas.height,Math.max(minH,box.h));
  return {x:Math.min(Math.max(0,box.x),canvas.width-w),y:Math.min(Math.max(0,box.y),canvas.height-h),w,h};
 }
+function selectedAreaIsOccupied(r){
+ if(!r||currentMode!=='add')return false;
+ try{
+  const cv=document.createElement('canvas');cv.width=Math.min(320,r.w);cv.height=Math.min(180,r.h);
+  const c=cv.getContext('2d',{willReadFrequently:true});
+  c.drawImage(image,r.x,r.y,r.w,r.h,0,0,cv.width,cv.height);
+  const pixels=c.getImageData(0,0,cv.width,cv.height).data;
+  let light=0,dark=0,mid=0,n=cv.width*cv.height;
+  for(let i=0;i<pixels.length;i+=4){
+   const high=Math.max(pixels[i],pixels[i+1],pixels[i+2]),low=Math.min(pixels[i],pixels[i+1],pixels[i+2]);
+   if(low>=210)light++;
+   if(high<=165)dark++;
+   if(low<210&&high>165)mid++;
+  }
+  return (light/n>.68&&dark/n>.0025&&dark>=2)||(light/n<=.68&&(dark+mid)/n>.42);
+ }catch{return false;}
+}
 function finalizeSelection(endPoint){
  if(!start){start=endPoint;}
  rect=selection(start,endPoint);
  if(currentMode==='add')rect=normalizeAdditionRect(rect);
  const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;
  const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);
- const invalid=currentMode==='add'?rect.w<4||rect.h<4:rect.w<4||rect.h<4||narrow;
+ const occupied=selectedAreaIsOccupied(rect);
+ const invalid=currentMode==='add'?rect.w<96||rect.h<48||occupied:rect.w<4||rect.h<4||narrow;
  sub.disabled=invalid;
- sel.textContent=invalid?'선택 영역을 조금 더 크게 잡아 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
- status.textContent=invalid?'영역 크기를 확인해 줘.':'선택 완료 · 전송할 수 있어.';
+ sel.textContent=occupied?'기존 글자나 이미지와 겹쳐. 빈 공간을 다시 선택해 줘.':invalid?'영역을 조금 더 크게 잡아 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
+ status.textContent=occupied?'겹침 감지 · 원본 내용 보호 중':invalid?'영역 크기를 확인해 줘.':'선택 완료 · 전송할 수 있어.';
  active=false;start=null;draw();
 }
 canvas.addEventListener('pointerdown',e=>{
@@ -168,7 +186,7 @@ try{
   before.parentElement.style.display='none';
   after.parentElement.firstChild.textContent='추가할 내용';
   document.getElementById('angle').parentElement.style.display='none';
-  sub.textContent='지정한 위치에 내용 추가 후 텔레그램으로 보내기';
+  sub.textContent='내용 추가 위치 확인 후 보내기';
   sel.textContent='이미지를 한 번 터치하거나 드래그해 위치를 지정해 줘. 작은 선택은 필요한 크기로 자동 확대돼.';
  }
  const sourcePath='/api/image-job/'+encodeURIComponent(job)+'/original';
@@ -182,16 +200,11 @@ try{
    const container=document.querySelector('.viewport');
    const available=Math.max(200,Math.min(720,container.clientWidth||720));
    stage.style.width=Math.min(available,image.naturalWidth)+'px';
-   if(currentMode==='add'){
-     const initial={x:Math.round(canvas.width*.20),y:Math.round(canvas.height*.42),
-       w:Math.round(canvas.width*.40),h:Math.round(canvas.height*.18)};
-     rect=normalizeAdditionRect(initial);
-     sub.disabled=rect.w<4||rect.h<4;
-     sel.textContent='기본 위치를 선택했어. 다른 곳을 터치하거나 드래그해서 위치를 바꿀 수 있어.';
-     status.textContent=sub.disabled?'이미지가 너무 작아.':'기본 영역 선택 완료 · 위치를 바꾸거나 전송해 줘.';
-   }else{
-     status.textContent='원본 이미지를 불러왔어. 사진에서 수정할 글자 위치를 선택해 줘.';
-   }
+   rect=null;
+   sub.disabled=true;
+   status.textContent=currentMode==='add'
+     ?'빈 공간을 터치하거나 드래그해서 위치를 선택해 줘. 글자 위에 겹치면 전송되지 않아.'
+     :'원본 이미지를 불러왔어. 사진에서 수정할 글자 위치를 선택해 줘.';
    draw();
  };
  image.onload=ready;
