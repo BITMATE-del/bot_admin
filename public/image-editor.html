@@ -24,9 +24,7 @@ button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{mi
 <div class="panel"><div class="viewport"><div class="image-stage"><img id="sourceImage" alt="원본 이미지"/><canvas id="image"></canvas></div></div><a id="sourceFileLink" style="display:block;margin:9px 0;color:#a9c7f6;font-size:13px" target="_blank" rel="noopener">원본 이미지 직접 보기</a><div class="fields">
 <label>기존 문구<input id="before" readonly></label>
 <label>변경할 문구<input id="after" maxlength="70"></label>
-</div><div id="addStyle" class="fields" hidden>
-<label>추가 문구 글꼴<select id="noteFont"><option value="noto">기본 고딕</option><option value="serif">명조</option><option value="system">일반 산세리프</option></select></label>
-<label>글자 크기<select id="noteSize"><option value="0">자동 맞춤</option><option value="9">9px</option><option value="11">11px</option><option value="13">13px</option><option value="16">16px</option><option value="20">20px</option><option value="24">24px</option></select></label></div><label>글자 기울기 (°)<input id="angle" type="number" min="-60" max="60" step="1" value="0"></label>
+</div><label>글자 기울기 (°)<input id="angle" type="number" min="-60" max="60" step="1" value="0"></label>
 <p class="hint" id="selection">이미지에서 수정할 숫자만 드래그하여 선택해 줘.</p>
 <button id="submit" disabled>선택한 영역 수정 후 텔레그램으로 보내기</button><button id="clear" class="secondary" style="margin-top:8px">선택 다시 하기</button>
 <div id="progressPanel" class="progress-panel" hidden aria-live="polite">
@@ -184,7 +182,7 @@ sub.addEventListener('click',async()=>{
  try{
   const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/apply',{
    method:'POST',headers:{'content-type':'application/json'},
-   body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value),font:document.getElementById('noteFont').value,fontSize:Number(document.getElementById('noteSize').value)})
+   body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
   });
   const payload=await response.json();
   if(!response.ok){
@@ -206,16 +204,6 @@ try{
  if(!/^[0-9a-f]{32}$/.test(job||''))throw Error('링크가 올바르지 않아.');
  const r=await fetch('/api/image-job/'+job+'/info');if(!r.ok)throw Error('편집 링크가 만료됐어. 봇에서 다시 요청해 줘.');
  const info=await r.json();currentMode=info.mode||'edit';before.value=info.before;after.value=info.after;
- if(currentMode==='add'){
-  document.querySelector('h1').textContent='추가 내용 위치 선택';
-  document.querySelector('main>.hint').textContent='추가 내용을 보여줄 위치를 충분히 넓게 사각형으로 선택해 줘. 원본과 구별되는 보완 영역으로 표시돼.';
-  before.parentElement.style.display='none';
-  after.parentElement.firstChild.textContent='추가할 내용';
-  document.getElementById('angle').parentElement.style.display='none';
-  document.getElementById('addStyle').hidden=false;
-  sub.textContent='내용 추가 위치 확인 후 보내기';
-  sel.textContent='이미지를 한 번 터치하거나 드래그해 위치를 지정해 줘. 작은 선택은 필요한 크기로 자동 확대돼.';
- }
  const sourcePath='/api/image-job/'+encodeURIComponent(job)+'/original';
  document.getElementById('sourceFileLink').href=sourcePath;
  const stage=document.querySelector('.image-stage');
