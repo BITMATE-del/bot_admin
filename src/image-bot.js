@@ -293,6 +293,34 @@ async function sendManualLink(chatId,jobId,base){
   await tg('sendMessage',{chat_id:chatId,text:'수정할 글자의 위치를 직접 선택할 수 있어. 아래 첫 버튼은 텔레그램 내부 화면, 두 번째는 외부 브라우저로 열어. 열리지 않으면 주소를 복사해서 크롬에 붙여넣어 줘. (30분 유효)\n\n'+url,disable_web_page_preview:true,reply_markup:{inline_keyboard:[[{text:'✏️ 텔레그램에서 위치 선택',web_app:{url}}],[{text:'🌐 브라우저로 열기',url}]]}});
 }
 
+async function addLabeledNoteAtPosition(original,note,selection){
+  const source=await sharp(original).rotate().png().toBuffer();
+  const {width:W,height:H}=await sharp(source).metadata();
+  const {x,y,w,h}=selection;
+  if(![x,y,w,h].every(Number.isInteger)||x<0||y<0||w<96||h<48||x+w>W||y+h>H){
+    throw new Error('추가 내용을 표시할 영역을 더 넓게 선택해 줘.');
+  }
+  const text=String(note||'').trim();
+  if(!text||text.length>180)throw new Error('추가할 문구를 180자 이내로 입력해 줘.');
+  const fontSize=Math.min(24,Math.max(10,Math.floor(h/4)));
+  const lineHeight=Math.ceil(fontSize*1.3);
+  const columnWidth=Math.max(1,w-20);
+  const maxChars=Math.max(5,Math.floor(columnWidth/fontSize));
+  const words=Array.from(text),lines=[];
+  while(words.length)lines.push(words.splice(0,maxChars).join(''));
+  if(lines.length*lineHeight+Math.max(24,fontSize*1.6)+10>h){
+    throw new Error('입력한 내용을 표시하기에는 영역이 좁아. 더 넓게 지정해 줘.');
+  }
+  const header=Math.max(22,Math.round(fontSize*1.5));
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'">'+
+    '<rect width="'+w+'" height="'+h+'" rx="5" fill="#f3f7ff" stroke="#4269ad" stroke-width="2"/>'+
+    '<rect x="0" y="0" width="'+w+'" height="'+header+'" rx="5" fill="#4269ad"/>'+
+    '<text x="9" y="'+Math.round(header*.72)+'" font-size="'+Math.max(12,Math.floor(header*.65))+'" font-weight="bold" font-family="Noto Sans CJK KR,sans-serif" fill="#ffffff">추가 내용</text>'+
+    lines.map((line,i)=>'<text x="10" y="'+Math.round(header+fontSize+6+i*lineHeight)+'" font-size="'+fontSize+'" font-family="Noto Sans CJK KR,sans-serif" fill="#182d50">'+esc(line)+'</text>').join('')+
+    '</svg>';
+  const label=await sharp(Buffer.from(svg)).png().toBuffer();
+  return sharp(source).composite([{input:label,left:x,top:y}]).png().toBuffer();
+}
 async function renderAdditionNote(original,note){
   const source=await sharp(original).rotate().png().toBuffer();
   const {width,height}=await sharp(source).metadata();
@@ -320,7 +348,7 @@ async function handle(update,base){
     if(mode!=='edit'&&mode!=='add')return;
     state.mode=mode;
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'작업 모드를 선택했어.'});
-    await send(chatId,mode==='edit'?'편집할 내용을 입력해 줘. 예: 일식 > 한식':'추가할 문구를 입력해 줘. 원본은 보존하고 편집본 하단에 추가 내용으로 표시해.');
+    await send(chatId,mode==='edit'?'편집할 내용을 입력해 줘. 예: 일식 > 한식':'추가할 문구를 입력해 줘. 다음 단계에서 이미지 안의 표시 위치를 직접 선택할 수 있어.');
     return;
   }
   if(cb?.data?.startsWith('im:')){
@@ -369,11 +397,12 @@ async function handle(update,base){
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
   if(saved.mode==='add'){
-    await send(chatId,'추가 내용 이미지를 준비 중이야.');
-    try{
-      const output=await renderAdditionNote(saved.buf,msg.text);
-      await sendOriginalAndEdit(chatId,saved.buf,output,true);
-    }catch(e){await send(chatId,'내용 추가 실패: '+String(e.message).slice(0,200));}
+    const note=msg.text.trim();
+    if(!note||note.length>180){await send(chatId,'추가할 문구를 180자 이내로 입력해 줘.');return;}
+    const id=makeManualJob(chatId,saved.buf,{from:'',to:note});
+    const job=manualJobs.get(id);job.mode='add';
+    await send(chatId,'추가할 문구를 받았어. 아래 링크에서 위치를 사각형으로 지정해 줘.\\n'+editorUrl(id));
+    await sendManualLink(chatId,id,base);
     return;
   }
   if(!saved.mode){await send(chatId,'먼저 편집 또는 내용 추가 버튼을 선택해 줘.');return;}
@@ -422,7 +451,7 @@ export function mountImageBot(app,base){
       const preview=await sharp(job.buf).rotate().flatten({background:'#ffffff'})
         .jpeg({quality:88,mozjpeg:true}).toBuffer();
       res.set('Cache-Control','no-store').json({
-        before:job.change.from,after:job.change.to,
+        before:job.change.from,after:job.change.to,mode:job.mode||'edit',
         preview:'data:image/jpeg;base64,'+preview.toString('base64')
       });
     }catch(e){
@@ -469,7 +498,7 @@ export function mountImageBot(app,base){
     const replacementChars=Array.from(job.change.to).length;
     // Do not silently cut off a longer label. Require a user-selected box
     // with enough width for the additional characters at similar text height.
-    if(replacementChars>originalChars && values.w < Math.ceil(replacementChars*values.h*0.49)){
+    if(job.mode!=='add' && replacementChars>originalChars && values.w < Math.ceil(replacementChars*values.h*0.49)){
       return res.status(409).json({
         code:'TEXT_REGION_TOO_NARROW',
         error:'변경할 글자가 더 길어 현재 선택 영역에서 잘릴 수 있어. 글자 양옆까지 더 넓게 선택해 줘.'
@@ -480,7 +509,9 @@ export function mountImageBot(app,base){
     (async()=>{
       try{
         job.state='editing';
-        const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
+        const output=job.mode==='add'
+          ? await addLabeledNoteAtPosition(job.buf,job.change.to,values)
+          : await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
         job.state='verifying';
         await verifyOutputFile(job.buf,output);
         job.state='sending';
