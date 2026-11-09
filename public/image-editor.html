@@ -20,12 +20,12 @@ button:disabled{opacity:.45;cursor:default}.secondary{background:#33445c}.msg{mi
 .progress-details span+span:before{content:" · "}
 
 </style></head>
-<body><main><h1>수정할 글자 위치 선택</h1><p class="hint">원본 이미지에서 수정할 숫자를 손가락이나 마우스로 <strong>사각형으로 감싸 줘.</strong> 위치를 직접 선택해야 엉뚱한 글자를 바꾸지 않아.</p>
+<body><main><h1>수정할 글자 위치 선택</h1><p class="hint">바꿀 글자 위치를 <strong>한 번 누르거나 드래그</strong>해 줘. 선택 영역을 확인한 뒤 전송할 수 있어.</p>
 <div class="panel"><div class="viewport"><div class="image-stage"><img id="sourceImage" alt="원본 이미지"/><canvas id="image"></canvas></div></div><a id="sourceFileLink" style="display:block;margin:9px 0;color:#a9c7f6;font-size:13px" target="_blank" rel="noopener">원본 이미지 직접 보기</a><div class="fields">
 <label>기존 문구<input id="before" readonly></label>
 <label>변경할 문구<input id="after" maxlength="70"></label>
 </div><label>글자 기울기 (°)<input id="angle" type="number" min="-60" max="60" step="1" value="0"></label>
-<p class="hint" id="selection">이미지에서 수정할 숫자만 드래그하여 선택해 줘.</p>
+<p class="hint" id="selection">글자 부분을 탭하거나 드래그하여 선택해 줘.</p>
 <button id="submit" disabled>선택한 영역 수정 후 텔레그램으로 보내기</button><button id="clear" class="secondary" style="margin-top:8px">선택 다시 하기</button>
 <div id="progressPanel" class="progress-panel" hidden aria-live="polite">
 <div class="progress-top"><strong id="progressLabel">준비 중</strong><strong id="progressPercent">0%</strong></div>
@@ -39,42 +39,12 @@ const q=new URLSearchParams(location.search),job=q.get('job');
 const canvas=document.getElementById('image'),ctx=canvas.getContext('2d');
 const sub=document.getElementById('submit'),status=document.getElementById('status'),sel=document.getElementById('selection');
 const before=document.getElementById('before'),after=document.getElementById('after');
-let currentMode='edit';
 let rect=null,start=null,active=false;const image=document.getElementById('sourceImage');
 function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
  if(rect){ctx.fillStyle='rgba(239,54,64,.13)';ctx.fillRect(rect.x,rect.y,rect.w,rect.h);ctx.strokeStyle='#ff3b45';ctx.lineWidth=Math.max(2,canvas.width/230);ctx.strokeRect(rect.x,rect.y,rect.w,rect.h);}
 }
 function point(e){const b=image.getBoundingClientRect();return{x:Math.max(0,Math.min(image.naturalWidth,(e.clientX-b.left)*image.naturalWidth/b.width)),y:Math.max(0,Math.min(image.naturalHeight,(e.clientY-b.top)*image.naturalHeight/b.height))}}
 function selection(a,b){return{x:Math.round(Math.min(a.x,b.x)),y:Math.round(Math.min(a.y,b.y)),w:Math.round(Math.abs(a.x-b.x)),h:Math.round(Math.abs(a.y-b.y))}}
-function normalizeAdditionRect(box,tapped=false){
- const length=Array.from(after.value.trim()).length;
- const minW=Math.min(canvas.width,Math.max(70,Math.min(190,25+length*10)));
- const minH=Math.min(canvas.height,46);
- // A drag preserves the selected top-left point; a tap is the CENTER of a new box.
- const w=Math.min(canvas.width,Math.max(minW,box.w));
- const h=Math.min(canvas.height,Math.max(minH,box.h));
- const x=tapped?box.x-w/2:box.x;
- const y=tapped?box.y-h/2:box.y;
- return {x:Math.round(Math.max(0,Math.min(x,canvas.width-w))),
-  y:Math.round(Math.max(0,Math.min(y,canvas.height-h))),w:Math.round(w),h:Math.round(h)};
-}
-function selectedAreaIsOccupied(r){
- if(!r||currentMode!=='add')return false;
- try{
-  const cv=document.createElement('canvas');cv.width=Math.min(320,r.w);cv.height=Math.min(180,r.h);
-  const c=cv.getContext('2d',{willReadFrequently:true});
-  c.drawImage(image,r.x,r.y,r.w,r.h,0,0,cv.width,cv.height);
-  const pixels=c.getImageData(0,0,cv.width,cv.height).data;
-  let light=0,dark=0,mid=0,n=cv.width*cv.height;
-  for(let i=0;i<pixels.length;i+=4){
-   const high=Math.max(pixels[i],pixels[i+1],pixels[i+2]),low=Math.min(pixels[i],pixels[i+1],pixels[i+2]);
-   if(low>=210)light++;
-   if(high<=165)dark++;
-   if(low<210&&high>165)mid++;
-  }
-  return (light/n>.68&&dark/n>.0025&&dark>=2)||(light/n<=.68&&(dark+mid)/n>.42);
- }catch{return false;}
-}
 function fitLongerReplacement(box){
  if(currentMode!=='edit')return box;
  const oldLength=Array.from(before.value).length;
@@ -84,43 +54,90 @@ function fitLongerReplacement(box){
  // Keep the left edge fixed and grow right only if the image contains room.
  return {...box,w:Math.min(canvas.width-box.x,Math.max(box.w,needed))};
 }
-function finalizeSelection(endPoint){
- if(!start){start=endPoint;}
- rect=selection(start,endPoint);
- const tapped=rect.w<8&&rect.h<8;
- if(currentMode==='add')rect=normalizeAdditionRect(rect,tapped);
- else rect=fitLongerReplacement(rect);
- const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;
- const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);
- const occupied=selectedAreaIsOccupied(rect);
- // The local color heuristic is only a warning. Let the backend check
- // actual source pixels; false positives must not disable the submit button.
- const invalid=currentMode==='add'?rect.w<70||rect.h<46:rect.w<4||rect.h<4||narrow;
- sub.disabled=invalid;
- sel.textContent=invalid?'영역을 조금 더 크게 선택해 줘.':occupied?'위치 선택 완료. 기존 글자와 겹칠 수 있으니 확인 후 전송해 줘.':'선택한 위치가 맞으면 파란 버튼을 눌러 전송해 줘.';
- status.textContent=invalid?'선택 영역 크기를 확인해 줘.':occupied?'겹침 가능성 안내 · 전송하면 서버에서 최종 확인해.':'선택 완료 · 전송할 수 있어.';
+function editTapRect(p){
+ // A tap identifies the center of the word. Give it an editable area that
+ // is large enough to be useful without selecting the entire image.
+ const W=canvas.width,H=canvas.height;
+ const chars=Math.max(1,Array.from(after.value||before.value).length);
+ const height=Math.min(H,Math.max(24,Math.min(85,Math.round(H*.065))));
+ const width=Math.min(W,Math.max(55,Math.min(W*.7,Math.ceil(chars*height*.57)+20)));
+ return {x:Math.max(0,Math.min(W-width,Math.round(p.x-width/2))),
+   y:Math.max(0,Math.min(H-height,Math.round(p.y-height/2))),
+   w:Math.round(width),h:Math.round(height)};
+}
+function commitSelection(endPoint){
+ if(!start)return;
+ let selected=selection(start,endPoint);
+ const small=selected.w<5||selected.h<5;
+ rect=small?editTapRect(endPoint):fitLongerReplacement(selected);
+ const required=Math.ceil(Array.from(after.value).length*rect.h*.49);
+ const tooNarrow=Array.from(after.value).length>Array.from(before.value).length&&rect.w<required;
+ sub.disabled=rect.w<4||rect.h<4||tooNarrow;
+ sel.textContent=tooNarrow?'바꿀 문구가 더 길어. 글자의 오른쪽 여백까지 선택해 줘.':
+   sub.disabled?'영역을 조금 더 크게 선택해 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
+ status.textContent=sub.disabled?'선택 영역을 확인해 줘.':
+   '선택 완료 · '+rect.w+'×'+rect.h+'px · 전송 가능';
  active=false;start=null;draw();
 }
+function beginSelection(p){
+ if(!image.complete||!image.naturalWidth){
+   status.textContent='원본 이미지 로딩이 끝나지 않았어.';return;
+ }
+ start=p;active=true;rect=null;sub.disabled=true;
+ status.textContent='영역 선택 중이야.';
+}
 canvas.addEventListener('pointerdown',e=>{
- if(!image.complete||!image.naturalWidth){status.textContent='원본 이미지가 아직 로딩 중이야.';return;}
- e.preventDefault();
- start=point(e);active=true;
- try{canvas.setPointerCapture(e.pointerId)}catch{}
- rect=null;sub.disabled=true;
+ if(e.button!==undefined&&e.button!==0)return;
+ e.preventDefault();beginSelection(point(e));
+ if(active)try{canvas.setPointerCapture(e.pointerId)}catch{}
 });
-canvas.addEventListener('pointermove',e=>{if(!active)return;e.preventDefault();rect=selection(start,point(e));draw()});
-canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();finalizeSelection(point(e))});
-canvas.addEventListener('pointercancel',e=>{if(!active)return;finalizeSelection(point(e))});
-// Do not process the synthetic click after pointerup; it used to move the
-// selection unexpectedly and disable the button again on mobile.
+canvas.addEventListener('pointermove',e=>{
+ if(!active)return;
+ e.preventDefault();rect=selection(start,point(e));draw();
+});
+canvas.addEventListener('pointerup',e=>{
+ if(!active)return;
+ e.preventDefault();commitSelection(point(e));
+});
+canvas.addEventListener('pointercancel',e=>{
+ if(!active)return;
+ e.preventDefault();commitSelection(point(e));
+});
+// Legacy embedded browsers can lack PointerEvent; use dedicated touch and
+// mouse handling only there to avoid processing each interaction twice.
 if(!('PointerEvent' in window)){
- canvas.addEventListener('click',e=>{
-  if(currentMode==='add'&&image.naturalWidth){
-   const p=point(e);start=p;finalizeSelection(p);
-  }
+ let lastTouchAt=0;
+ const touchPoint=t=>point({clientX:t.clientX,clientY:t.clientY});
+ canvas.addEventListener('touchstart',e=>{
+   if(!e.touches.length)return;e.preventDefault();lastTouchAt=Date.now();
+   beginSelection(touchPoint(e.touches[0]));
+ },{passive:false});
+ canvas.addEventListener('touchmove',e=>{
+   if(!active||!e.touches.length)return;e.preventDefault();
+   rect=selection(start,touchPoint(e.touches[0]));draw();
+ },{passive:false});
+ canvas.addEventListener('touchend',e=>{
+   if(!active)return;e.preventDefault();
+   commitSelection(e.changedTouches.length?touchPoint(e.changedTouches[0]):start);
+ },{passive:false});
+ canvas.addEventListener('mousedown',e=>{
+   if(Date.now()-lastTouchAt<700)return;
+   if(e.button!==0)return;beginSelection(point(e));
+ });
+ canvas.addEventListener('mousemove',e=>{
+   if(!active||Date.now()-lastTouchAt<700)return;
+   rect=selection(start,point(e));draw();
+ });
+ canvas.addEventListener('mouseup',e=>{
+   if(!active||Date.now()-lastTouchAt<700)return;
+   commitSelection(point(e));
  });
 }
-document.getElementById('clear').addEventListener('click',()=>{rect=null;sub.disabled=true;sel.textContent='선택 다시 하기: 숫자를 감싸 줘.';draw()});
+document.getElementById('clear').addEventListener('click',()=>{
+ active=false;start=null;rect=null;sub.disabled=true;
+ sel.textContent='글자 위를 한 번 누르거나 드래그해 선택해 줘.';
+ status.textContent='선택 초기화 완료';draw();
+});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const panel=document.getElementById('progressPanel');
 const progressFill=document.getElementById('progressFill');
@@ -203,7 +220,7 @@ sub.addEventListener('click',async()=>{
 try{
  if(!/^[0-9a-f]{32}$/.test(job||''))throw Error('링크가 올바르지 않아.');
  const r=await fetch('/api/image-job/'+job+'/info');if(!r.ok)throw Error('편집 링크가 만료됐어. 봇에서 다시 요청해 줘.');
- const info=await r.json();currentMode=info.mode||'edit';before.value=info.before;after.value=info.after;
+ const info=await r.json();before.value=info.before;after.value=info.after;
  const sourcePath='/api/image-job/'+encodeURIComponent(job)+'/original';
  document.getElementById('sourceFileLink').href=sourcePath;
  const stage=document.querySelector('.image-stage');
@@ -217,9 +234,7 @@ try{
    stage.style.width=Math.min(available,image.naturalWidth)+'px';
    rect=null;
    sub.disabled=true;
-   status.textContent=currentMode==='add'
-     ?'빈 공간을 터치하거나 드래그해서 위치를 선택해 줘. 글자 위에 겹치면 전송되지 않아.'
-     :'원본 이미지를 불러왔어. 사진에서 수정할 글자 위치를 선택해 줘.';
+   status.textContent='원본 이미지를 불러왔어. 글자 위를 한 번 누르거나 드래그해 줘.';
    draw();
  };
  image.onload=ready;
