@@ -37,6 +37,7 @@ const q=new URLSearchParams(location.search),job=q.get('job');
 const canvas=document.getElementById('image'),ctx=canvas.getContext('2d');
 const sub=document.getElementById('submit'),status=document.getElementById('status'),sel=document.getElementById('selection');
 const before=document.getElementById('before'),after=document.getElementById('after');
+let currentMode='edit';
 let rect=null,start=null,active=false;const image=document.getElementById('sourceImage');
 function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
  if(rect){ctx.fillStyle='rgba(239,54,64,.13)';ctx.fillRect(rect.x,rect.y,rect.w,rect.h);ctx.strokeStyle='#ff3b45';ctx.lineWidth=Math.max(2,canvas.width/230);ctx.strokeRect(rect.x,rect.y,rect.w,rect.h);}
@@ -45,7 +46,7 @@ function point(e){const b=canvas.getBoundingClientRect();return{x:Math.max(0,Mat
 function selection(a,b){return{x:Math.round(Math.min(a.x,b.x)),y:Math.round(Math.min(a.y,b.y)),w:Math.round(Math.abs(a.x-b.x)),h:Math.round(Math.abs(a.y-b.y))}}
 canvas.addEventListener('pointerdown',e=>{if(!image.complete||!image.naturalWidth){status.textContent='원본 이미지 로딩이 끝나지 않았어. 사진이 보이는지 확인해 줘.';return;}e.preventDefault();start=point(e);active=true;canvas.setPointerCapture(e.pointerId);rect=null;sub.disabled=true;});
 canvas.addEventListener('pointermove',e=>{if(!active)return;e.preventDefault();rect=selection(start,point(e));draw()});
-canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();active=false;rect=selection(start,point(e));const longer=Array.from(after.value).length>Array.from(before.value).length;const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);sub.disabled=!rect||rect.w<4||rect.h<4||narrow;sel.textContent=narrow?'변경할 글자가 더 길어. 글자 양옆의 여유 공간까지 넓게 선택해 줘.':sub.disabled?'선택 영역을 조금 더 크게 잡아 줘.':'선택한 위치가 정확한지 확인하고 전송해 줘.';draw()});
+canvas.addEventListener('pointerup',e=>{if(!active)return;e.preventDefault();active=false;rect=selection(start,point(e));const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);sub.disabled=!rect||(currentMode==='add'?(rect.w<96||rect.h<48):(rect.w<4||rect.h<4||narrow));sel.textContent=narrow?'변경할 글자가 더 길어. 글자 양옆의 여유 공간까지 넓게 선택해 줘.':sub.disabled?'선택 영역을 조금 더 크게 잡아 줘.':'선택한 위치가 정확한지 확인하고 전송해 줘.';draw()});
 document.getElementById('clear').addEventListener('click',()=>{rect=null;sub.disabled=true;sel.textContent='선택 다시 하기: 숫자를 감싸 줘.';draw()});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const panel=document.getElementById('progressPanel');
@@ -129,7 +130,16 @@ sub.addEventListener('click',async()=>{
 try{
  if(!/^[0-9a-f]{32}$/.test(job||''))throw Error('링크가 올바르지 않아.');
  const r=await fetch('/api/image-job/'+job+'/info');if(!r.ok)throw Error('편집 링크가 만료됐어. 봇에서 다시 요청해 줘.');
- const info=await r.json();before.value=info.before;after.value=info.after;
+ const info=await r.json();currentMode=info.mode||'edit';before.value=info.before;after.value=info.after;
+ if(currentMode==='add'){
+  document.querySelector('h1').textContent='추가 내용 위치 선택';
+  document.querySelector('main>.hint').textContent='추가 내용을 보여줄 위치를 충분히 넓게 사각형으로 선택해 줘. 원본과 구별되는 보완 영역으로 표시돼.';
+  document.querySelector('label:has(#before)').style.display='none';
+  document.querySelector('label:has(#after)').firstChild.textContent='추가할 내용';
+  document.getElementById('angle').parentElement.style.display='none';
+  sub.textContent='지정한 위치에 내용 추가 후 텔레그램으로 보내기';
+  sel.textContent='내용이 잘리지 않도록 충분한 가로·세로 공간을 선택해 줘.';
+ }
  const sourcePath='/api/image-job/'+encodeURIComponent(job)+'/original';
  document.getElementById('sourceFileLink').href=sourcePath;
  const stage=document.querySelector('.image-stage');
