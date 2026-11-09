@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
 import { reviseDesignRegion, editWholeImage, interpretImageRequest } from './ai-image-design.js';
+import { createImageCredits } from './image-credits.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
@@ -293,7 +294,20 @@ async function sendManualLink(chatId,jobId,base){
   await tg('sendMessage',{chat_id:chatId,text:'수정할 글자의 위치를 직접 선택할 수 있어. 아래 첫 버튼은 텔레그램 내부 화면, 두 번째는 외부 브라우저로 열어. 열리지 않으면 주소를 복사해서 크롬에 붙여넣어 줘. (30분 유효)\n\n'+url,disable_web_page_preview:true,reply_markup:{inline_keyboard:[[{text:'✏️ 텔레그램에서 위치 선택',web_app:{url}}],[{text:'🌐 브라우저로 열기',url}]]}});
 }
 
-async function handle(update,base){
+async function sendBalance(chatId,uid,credits,heading='사용 가능 횟수'){
+  const b=await credits.status(uid);
+  await send(chatId,'🎫 '+heading+'\\n고유 UID: '+b.uid+'\\n무료 체험: '+b.trial_left+'/'+b.trial_total+'회\\n충전 잔여: '+b.paid_left+'회\\n전체 잔여: '+b.remaining+'회\\n완료한 편집: '+b.used+'회\\n※ 편집 완료 후 전송에 성공한 경우만 차감돼.');
+  return b;
+}
+async function obtainCredit(chatId,uid,credits,source){
+  const reserved=await credits.reserve(uid,source);
+  if(!reserved.ok){
+    await send(chatId,'무료 체험 횟수를 모두 사용했어.\\n현재 남은 편집 횟수: 0회\\n충전 기능은 추후 제공될 예정이야. /잔여횟수 로 확인할 수 있어.');
+    return null;
+  }
+  return reserved.id;
+}
+async function handle(update,base,credits){
   const cb=update.callback_query;
   if(cb?.data?.startsWith('imode:')){
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'이제 편집만 지원해. 이미지를 다시 올려 줘.',show_alert:true});
@@ -329,7 +343,16 @@ async function handle(update,base){
   if(!msg||msg.chat?.type!=='private')return;
   const chatId=msg.chat.id;
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'사진을 올리고 바꾸고 싶은 부분을 편하게 말해 줘. 짧게 말해도 이미지 내용을 보고 수정할게.');
+    await send(chatId,'📸 포토샵봇\\n이미지를 올리고 바꾸고 싶은 부분을 말해 줘.\\n예: 일식 > 한식\\n\\n/잔여횟수 - 체험·충전 잔여 횟수\\n/내UID - 고유 UID 확인');
+    await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
+    return;
+  }
+  if(['/잔여횟수','/balance','/credits'].includes(msg.text?.trim())){
+    await sendBalance(chatId,msg.from.id,credits);
+    return;
+  }
+  if(['/내UID','/uid'].includes(msg.text?.trim())){
+    await send(chatId,'고유 UID: '+msg.from.id+'\\n이 UID를 기준으로 무료 체험 횟수가 관리돼.');
     return;
   }
   const item=msg.photo?.at(-1)||((msg.document?.mime_type||'').startsWith('image/')?msg.document:null);
@@ -338,7 +361,10 @@ async function handle(update,base){
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now(),mode:'edit'});
     pending.delete(String(msg.from.id));
-    await send(chatId,'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식');
+    const balance=await credits.status(msg.from.id);
+    await send(chatId,balance.remaining>0
+      ?'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\\n🎫 잔여 편집 횟수: '+balance.remaining+'회'
+      :'이미지를 받았지만 이용 가능한 편집 횟수가 없어. /잔여횟수 로 확인해 줘.');
     return;
   }
   if(!msg.text)return;
@@ -373,7 +399,8 @@ async function handle(update,base){
     await sendManualLink(chatId,manualId,base);
   }
 }
-export function mountImageBot(app,base){
+export function mountImageBot(app,base,pool){
+  const credits=createImageCredits(pool);
   if(!token){console.log('Image bot disabled (IMAGE_BOT_TOKEN absent)');return async()=>{};}
   const secret=crypto.createHash('sha256').update(token+':image-webhook').digest('hex');
   const getManual=req=>{
@@ -475,7 +502,7 @@ export function mountImageBot(app,base){
     if(recent.has(id))return res.sendStatus(200);
     recent.set(id,Date.now());
     res.sendStatus(200);
-    handle(req.body,base).catch(async e=>{
+    handle(req.body,base,credits).catch(async e=>{
       console.error('image bot update failed:',e.message);
       const chatId=req.body?.message?.chat?.id;
       if(chatId)try{await send(chatId,'수정 실패: '+String(e.message).slice(0,200));}catch{}
@@ -484,6 +511,7 @@ export function mountImageBot(app,base){
   const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,s] of manualJobs)if(Date.now()-s.created>ttl)manualJobs.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);},60000);
   sweep.unref();
   return async()=>{
+    await credits.init();
     const me=await tg('getMe');
     await tg('setWebhook',{url:base+'/telegram/image-webhook',secret_token:secret,allowed_updates:['message','callback_query'],drop_pending_updates:false});
     console.log('Image editor bot started @'+me.username);
