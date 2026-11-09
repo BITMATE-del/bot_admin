@@ -451,6 +451,7 @@ export function mountImageBot(app,base,pool){
     if(!job)return res.status(404).json({state:'expired',progress:0,message:'편집 요청이 만료됐어.'});
     const stages={
       ready:[0,'수정 위치 선택 대기'],
+      reserving:[8,'사용 가능 횟수 확인 중'],
       preparing:[15,'원본 이미지 준비 중'],
       editing:[60,'AI가 이미지를 수정 중'],
       verifying:[85,'편집 결과 파일 검수 중'],
@@ -467,10 +468,10 @@ export function mountImageBot(app,base,pool){
       elapsedSeconds,etaMinSeconds:eta.min,etaMaxSeconds:eta.max,etaBasis:eta.basis
     });
   });
-  app.post('/api/image-job/:id/apply',(req,res)=>{
+  app.post('/api/image-job/:id/apply',async(req,res)=>{
     const job=getManual(req);
     if(!job)return res.status(404).json({error:'Expired edit request'});
-    if(['preparing','editing','verifying','sending'].includes(job.state))return res.status(202).json({state:job.state});
+    if(['reserving','preparing','editing','verifying','sending'].includes(job.state))return res.status(202).json({state:job.state});
     if(job.state==='done')return res.json({state:'done'});
     if(String(req.body?.after||'')!==job.change.to)return res.status(400).json({error:'Unexpected replacement value'});
     const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
@@ -485,7 +486,20 @@ export function mountImageBot(app,base,pool){
         error:'변경할 글자가 더 길어 현재 선택 영역에서 잘릴 수 있어. 글자 양옆까지 더 넓게 선택해 줘.'
       });
     }
-    job.state='preparing';job.error=null;job.startedAt=Date.now();
+    job.state='reserving';job.error=null;
+    let creditId;
+    try{
+      const reservation=await credits.reserve(job.uid,'manual_region');
+      if(!reservation.ok){
+        job.state='failed';job.error='편집 이용권 잔여 횟수가 없어. /잔여횟수 로 확인해 줘.';
+        return res.status(402).json({error:job.error,code:'NO_CREDITS'});
+      }
+      creditId=reservation.id;
+    }catch(error){
+      job.state='failed';job.error='이용권 확인에 실패했어. 다시 시도해 줘.';
+      return res.status(503).json({error:job.error});
+    }
+    job.state='preparing';job.startedAt=Date.now();
     res.status(202).json({state:'preparing',progress:15});
     (async()=>{
       try{
@@ -495,18 +509,25 @@ export function mountImageBot(app,base,pool){
         await verifyOutputFile(job.buf,output);
         job.state='sending';
         await sendOriginalAndEdit(job.chatId,job.buf,output);
+        await credits.consume(creditId);
         job.state='done';
+        await sendBalance(job.chatId,job.uid,credits,'편집 완료 · 남은 이용권').catch(console.error);
         if(job.startedAt){
           const secs=Math.max(1,Math.round((Date.now()-job.startedAt)/1000));
           successfulEditDurations.push(secs);
           if(successfulEditDurations.length>60)successfulEditDurations.shift();
         }
       }catch(error){
-        job.error=String(error.message||error).slice(0,240);
+        await credits.release(creditId).catch(console.error);
+        job.error=String(error.message||error).slice(0,240)+' · 실패한 편집은 차감하지 않아.';
         job.state='failed';
         console.error('image editor task:',job.error);
       }
-    })().catch(error=>{job.state='failed';job.error=String(error.message||error).slice(0,240);console.error('image editor task unexpected:',error);});
+    })().catch(async error=>{
+      await credits.release(creditId).catch(console.error);
+      job.state='failed';job.error=String(error.message||error).slice(0,240);
+      console.error('image editor task unexpected:',error);
+    });
   });
   const recent=new Map();
   app.post('/telegram/image-webhook',async(req,res)=>{
