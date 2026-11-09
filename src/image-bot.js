@@ -2,12 +2,10 @@ import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
 import { reviseDesignRegion, editWholeImage, interpretImageRequest } from './ai-image-design.js';
-import { generateWorkTemplate } from './document-template.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
 const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId) + '&v=20261109-4';
-const documentTemplateUrl = jobId => editorOrigin + '/document-template.html?job=' + encodeURIComponent(jobId);
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
@@ -295,89 +293,10 @@ async function sendManualLink(chatId,jobId,base){
   await tg('sendMessage',{chat_id:chatId,text:'수정할 글자의 위치를 직접 선택할 수 있어. 아래 첫 버튼은 텔레그램 내부 화면, 두 번째는 외부 브라우저로 열어. 열리지 않으면 주소를 복사해서 크롬에 붙여넣어 줘. (30분 유효)\n\n'+url,disable_web_page_preview:true,reply_markup:{inline_keyboard:[[{text:'✏️ 텔레그램에서 위치 선택',web_app:{url}}],[{text:'🌐 브라우저로 열기',url}]]}});
 }
 
-async function addLabeledNoteAtPosition(original,note,selection,style={}){
-  const source=await sharp(original).rotate().png().toBuffer();
-  const {width:W,height:H}=await sharp(source).metadata();
-  const {x,y,w,h}=selection;
-  if(![x,y,w,h].every(Number.isInteger)||x<0||y<0||w<70||h<46||x+w>W||y+h>H){
-    throw new Error('추가 내용을 표시할 영역을 더 넓게 선택해 줘.');
-  }
-  // Reject a labeled addition if it would cover existing dark text on a
-  // predominantly light, document-like background. Never overwrite content.
-  const sampled=await sharp(source).extract({left:x,top:y,width:w,height:h})
-    .removeAlpha().raw().toBuffer({resolveWithObject:true});
-  // Ignore soft/tinted background decoration. Block only dense, high
-  // contrast dark marks likely to be existing lettering on a light panel.
-  const pixels=sampled.data,channels=sampled.info.channels;
-  let light=0,dark=0,denseRows=0;
-  for(let yy=0;yy<h;yy++){
-    let rowDark=0;
-    for(let xx=0;xx<w;xx++){
-      const i=(yy*w+xx)*channels;
-      const r=pixels[i],g=pixels[i+1],b=pixels[i+2];
-      if(Math.min(r,g,b)>207)light++;
-      if(Math.max(r,g,b)<145 && Math.max(r,g,b)-Math.min(r,g,b)<32){
-        dark++;rowDark++;
-      }
-    }
-    if(rowDark>=Math.max(3,Math.ceil(w*.045)))denseRows++;
-  }
-  if(light/(w*h)>.62&&dark>Math.max(7,w*h*.006)&&denseRows>=Math.max(3,Math.floor(h*.10))){
-    throw new Error('기존 글자 위에 겹칠 수 있어. 원본 글자를 가리지 않는 빈 공간을 선택해 줘.');
-  }
-  const text=String(note||'').trim();
-  if(!text||text.length>180)throw new Error('추가할 문구를 180자 이내로 입력해 줘.');
-  const allowedFonts={noto:'Noto Sans CJK KR,sans-serif',serif:'Noto Serif CJK KR,serif',system:'DejaVu Sans,sans-serif'};
-  const fontFamily=allowedFonts[style.font]||allowedFonts.noto;
-  const requestedSize=Number(style.size);
-  const autoSize=Math.min(20,Math.max(9,Math.min(Math.floor((h-22)/2),Math.floor((w-20)/Math.max(1,Array.from(text).length)))));
-  const fontSize=Number.isInteger(requestedSize)&&requestedSize>=9&&requestedSize<=24?requestedSize:autoSize;
-  const lineHeight=Math.ceil(fontSize*1.3);
-  const columnWidth=Math.max(1,w-20);
-  const maxChars=Math.max(1,Math.floor(columnWidth/fontSize));
-  const words=Array.from(text),lines=[];
-  while(words.length)lines.push(words.splice(0,maxChars).join(''));
-  if(lines.length*lineHeight+23+4>h){
-    throw new Error('입력한 내용을 표시하기에는 영역이 좁아. 더 넓게 지정해 줘.');
-  }
-  const header=22;
-  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'">'+
-    '<rect width="'+w+'" height="'+h+'" rx="5" fill="#f3f7ff" stroke="#4269ad" stroke-width="2"/>'+
-    '<rect x="0" y="0" width="'+w+'" height="'+header+'" rx="5" fill="#4269ad"/>'+
-    '<text x="9" y="'+Math.round(header*.72)+'" font-size="'+Math.max(12,Math.floor(header*.65))+'" font-weight="bold" font-family="Noto Sans CJK KR,sans-serif" fill="#ffffff">추가 내용</text>'+
-    lines.map((line,i)=>'<text x="10" y="'+Math.round(header+fontSize+2+i*lineHeight)+'" font-size="'+fontSize+'" font-family="'+fontFamily+'" fill="#182d50">'+esc(line)+'</text>').join('')+
-    '</svg>';
-  const label=await sharp(Buffer.from(svg)).png().toBuffer();
-  return sharp(source).composite([{input:label,left:x,top:y}]).png().toBuffer();
-}
-async function renderAdditionNote(original,note){
-  const source=await sharp(original).rotate().png().toBuffer();
-  const {width,height}=await sharp(source).metadata();
-  const text=String(note||'').trim();
-  if(!text||text.length>220)throw new Error('추가할 내용을 220자 이내로 입력해 줘.');
-  const fontSize=Math.max(12,Math.min(22,Math.floor(width/27)));
-  const margin=16;
-  const charCount=Math.max(8,Math.floor((width-margin*2)/fontSize));
-  const chars=[...text],lines=[];
-  while(chars.length)lines.push(chars.splice(0,charCount).join(''));
-  const lineHeight=Math.ceil(fontSize*1.5);
-  const extra=80+lineHeight*lines.length;
-  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+extra+'"><rect width="100%" height="100%" fill="#f3f6fa"/><text x="16" y="32" font-size="16" font-weight="700" fill="#26354b" font-family="Noto Sans CJK KR,sans-serif">추가 내용</text>'+lines.map((line,i)=>'<text x="16" y="'+(62+i*lineHeight)+'" font-size="'+fontSize+'" fill="#26354b" font-family="Noto Sans CJK KR,sans-serif">'+esc(line)+'</text>').join('')+'</svg>';
-  const footer=await sharp(Buffer.from(svg)).png().toBuffer();
-  return sharp(source).extend({bottom:extra,background:'#ffffff'}).composite([{input:footer,left:0,top:height}]).png().toBuffer();
-}
 async function handle(update,base){
   const cb=update.callback_query;
   if(cb?.data?.startsWith('imode:')){
-    const mode=cb.data.slice(6),chatId=cb.message?.chat?.id;
-    const state=sessions.get(chatId);
-    if(!state||Date.now()-state.created>ttl){
-      await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'이미지를 다시 올려 줘.',show_alert:true});return;
-    }
-    if(mode!=='edit'&&mode!=='add')return;
-    state.mode=mode;
-    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'작업 모드를 선택했어.'});
-    await send(chatId,mode==='edit'?'편집할 내용을 입력해 줘. 예: 일식 > 한식':'새 문서를 만들게. 진행 일정이나 작성할 내용을 입력해 줘. 다음 화면에서 다른 항목도 수정할 수 있어.');
+    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'이제 편집만 지원해. 이미지를 다시 올려 줘.',show_alert:true});
     return;
   }
   if(cb?.data?.startsWith('im:')){
@@ -417,25 +336,14 @@ async function handle(update,base){
   if(item){
     const buf=await download(item.file_id);
     await sharp(buf).metadata();
-    sessions.set(chatId,{buf,created:Date.now(),mode:null});
+    sessions.set(chatId,{buf,created:Date.now(),mode:'edit'});
     pending.delete(String(msg.from.id));
-    await tg('sendMessage',{chat_id:chatId,text:'이미지를 받았어. 원하는 작업을 선택해 줘.',reply_markup:{inline_keyboard:[[{text:'✏️ 편집',callback_data:'imode:edit'},{text:'📝 내용 추가',callback_data:'imode:add'}]]}});
+    await send(chatId,'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식');
     return;
   }
   if(!msg.text)return;
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
-  if(saved.mode==='add'){
-    const note=msg.text.trim();
-    if(!note||note.length>180){await send(chatId,'입력할 내용을 180자 이내로 보내 줘.');return;}
-    const id=makeManualJob(chatId,saved.buf,{from:'',to:note});
-    const job=manualJobs.get(id);job.mode='template';
-    const url=documentTemplateUrl(id);
-    await tg('sendMessage',{chat_id:chatId,text:'새 문서 양식 준비 완료. 아래에서 진행 사유·일정 등을 입력하고 미리보기 후 생성해 줘.\\n'+url,
-      reply_markup:{inline_keyboard:[[{text:'📝 새 문서 양식 작성',url}]]}});
-    return;
-  }
-  if(!saved.mode){await send(chatId,'먼저 편집 또는 내용 추가 버튼을 선택해 줘.');return;}
   const compact=msg.text.trim().match(/^([^\s>→]{1,50})\s+([^\s>→]{1,50})$/u);
   const changes=pairs(msg.text) || (compact && /\d/.test(compact[1]) && /\d/.test(compact[2]) ? [{from:compact[1],to:compact[2]}] : null);
   if(!changes){
@@ -473,35 +381,6 @@ export function mountImageBot(app,base){
     if(!job||Date.now()-job.created>ttl)return null;
     return job;
   };
-  app.get('/api/document-job/:id/info',(req,res)=>{
-    const job=getManual(req);
-    if(!job||job.mode!=='template')return res.status(404).json({error:'문서 작업이 만료됐어.'});
-    res.set('Cache-Control','no-store').json({initialText:job.change.to,done:!!job.generated});
-  });
-  app.post('/api/document-job/:id/generate',async(req,res)=>{
-    const job=getManual(req);
-    if(!job||job.mode!=='template')return res.status(404).json({error:'문서 작업이 만료됐어.'});
-    if(job.busy)return res.status(409).json({error:'이미 문서를 전송하는 중이야.'});
-    if(job.generated)return res.json({ok:true,done:true});
-    job.busy=true;
-    try{
-      const png=await generateWorkTemplate(req.body||{});
-      const form=new FormData();
-      form.append('chat_id',String(job.chatId));
-      form.append('document',new Blob([png],{type:'image/png'}),'new-work-document.png');
-      form.append('caption','새로 작성한 업무 문서 · 원본 이미지와 별개의 새 양식');
-      const response=await fetch('https://api.telegram.org/bot'+token+'/sendDocument',{
-        method:'POST',body:form,signal:AbortSignal.timeout(45000)
-      });
-      const data=await response.json();
-      if(!data.ok)throw new Error(data.description||'문서 전송 실패');
-      job.generated=true;
-      res.json({ok:true,done:true});
-    }catch(e){
-      console.error('template generation failed:',e.message);
-      res.status(400).json({error:String(e.message||e).slice(0,200)});
-    }finally{job.busy=false}
-  });
   app.get('/api/image-job/:id/info',async(req,res)=>{
     const job=getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
     try{
@@ -557,7 +436,7 @@ export function mountImageBot(app,base){
     const replacementChars=Array.from(job.change.to).length;
     // Do not silently cut off a longer label. Require a user-selected box
     // with enough width for the additional characters at similar text height.
-    if(job.mode!=='add' && replacementChars>originalChars && values.w < Math.ceil(replacementChars*values.h*0.49)){
+    if(replacementChars>originalChars && values.w < Math.ceil(replacementChars*values.h*0.49)){
       return res.status(409).json({
         code:'TEXT_REGION_TOO_NARROW',
         error:'변경할 글자가 더 길어 현재 선택 영역에서 잘릴 수 있어. 글자 양옆까지 더 넓게 선택해 줘.'
@@ -568,9 +447,7 @@ export function mountImageBot(app,base){
     (async()=>{
       try{
         job.state='editing';
-        const output=job.mode==='add'
-          ? await addLabeledNoteAtPosition(job.buf,job.change.to,values,{font:req.body?.font,size:req.body?.fontSize})
-          : await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
+        const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
         job.state='verifying';
         await verifyOutputFile(job.buf,output);
         job.state='sending';
