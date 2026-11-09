@@ -300,6 +300,25 @@ async function addLabeledNoteAtPosition(original,note,selection){
   if(![x,y,w,h].every(Number.isInteger)||x<0||y<0||w<96||h<48||x+w>W||y+h>H){
     throw new Error('추가 내용을 표시할 영역을 더 넓게 선택해 줘.');
   }
+  // Reject a labeled addition if it would cover existing dark text on a
+  // predominantly light, document-like background. Never overwrite content.
+  const sampled=await sharp(source).extract({left:x,top:y,width:w,height:h})
+    .removeAlpha().raw().toBuffer({resolveWithObject:true});
+  let light=0,dark=0,mid=0;
+  for(let i=0;i<sampled.data.length;i+=sampled.info.channels){
+    const r=sampled.data[i],g=sampled.data[i+1],b=sampled.data[i+2];
+    const brightest=Math.max(r,g,b),lowest=Math.min(r,g,b);
+    if(lowest>=210)light++;
+    if(brightest<=165)dark++;
+    if(lowest<210&&brightest>165)mid++;
+  }
+  const n=w*h;
+  if(light/n>.68 && dark/n>.0025 && dark>=3){
+    throw new Error('선택한 위치에 기존 글자가 있어. 원본을 가리지 않도록 빈 공간을 선택해 줘.');
+  }
+  if(light/n<=.68 && (dark+mid)/n>.42){
+    throw new Error('선택 영역에 기존 이미지 내용이 많아. 빈 공간을 선택해 줘.');
+  }
   const text=String(note||'').trim();
   if(!text||text.length>180)throw new Error('추가할 문구를 180자 이내로 입력해 줘.');
   const fontSize=Math.min(24,Math.max(10,Math.floor(h/4)));
