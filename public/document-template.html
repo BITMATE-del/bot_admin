@@ -1,0 +1,55 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>새 문서 양식 작성</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f2f5f9;color:#1f2937;font:15px/1.5 system-ui,-apple-system,"Noto Sans KR",sans-serif}main{max-width:780px;margin:auto;padding:22px}h1{font-size:25px;margin:6px 0 8px}.hint{color:#64748b;margin-bottom:20px}
+section{background:#fff;border:1px solid #dfe5ed;border-radius:13px;padding:20px;margin:12px 0;box-shadow:0 3px 14px #1a335509}
+label{display:block;font-size:14px;font-weight:650;margin:12px 0 5px}input,textarea{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:12px;font:inherit;outline-color:#3967ad}textarea{min-height:80px;resize:vertical}
+button{cursor:pointer;width:100%;background:#285db5;color:white;border:0;border-radius:10px;padding:15px;font:inherit;font-weight:700}button:disabled{opacity:.5}.muted{color:#64748b;font-size:13px}#status{min-height:24px;margin-top:12px}
+.preview{background:#f8fafc;border:1px solid #d7dee9;border-radius:10px;padding:15px;margin:16px 0}.preview h2{font-size:19px;margin:6px 0 14px}.preview table{border-collapse:collapse;width:100%;font-size:13px}.preview th,.preview td{border:1px solid #ced8e5;padding:9px;text-align:left;white-space:pre-wrap;word-break:break-word}.preview th{width:27%;background:#edf2f8}
+</style></head><body><main>
+<h1>새 문서 양식 작성</h1>
+<p class="hint">기존 이미지를 수정하지 않고, 입력한 값으로 동일한 항목 구조의 새 문서를 생성합니다.</p>
+<section><label for="title">문서 제목</label><input id="title" maxlength="60" value="업무 진행표">
+<label for="reason">진행 사유</label><input id="reason" maxlength="150" placeholder="예: 공통">
+<label for="schedule">진행 일정</label><input id="schedule" maxlength="120" placeholder="예: 2026년 11월 6일">
+<label for="owner">담당자</label><input id="owner" maxlength="70" placeholder="선택">
+<label for="notes">비고</label><textarea id="notes" maxlength="350" placeholder="선택"></textarea>
+<div class="preview"><div class="muted">미리보기 · 새로 작성하는 문서</div><h2 id="previewTitle">업무 진행표</h2><table><tbody id="previewRows"></tbody></table></div>
+<button id="submit">새 문서 PNG 생성 후 텔레그램으로 보내기</button><div id="status" role="status"></div>
+<p class="muted">결과물은 새로 작성한 문서로 표시되며 기존 원본도 별도로 보존됩니다.</p>
+</section></main><script>
+(async()=>{
+const id=new URLSearchParams(location.search).get('job');
+const fields=['title','reason','schedule','owner','notes'];
+const names={'reason':'진행 사유','schedule':'진행 일정','owner':'담당자','notes':'비고'};
+const $=id=>document.getElementById(id);
+const btn=$('submit'),status=$('status');
+function render(){
+ $('previewTitle').textContent=$('title').value||'업무 진행표';
+ $('previewRows').replaceChildren();
+ for(const key of ['reason','schedule','owner','notes']){
+   const row=document.createElement('tr'),th=document.createElement('th'),td=document.createElement('td');
+   th.textContent=names[key];td.textContent=$(key).value||'—';row.append(th,td);$('previewRows').append(row);
+ }
+}
+fields.forEach(k=>$(k).addEventListener('input',render));render();
+try{
+ if(!/^[0-9a-f]{32}$/.test(id||''))throw Error('링크가 올바르지 않아.');
+ const resp=await fetch('/api/document-job/'+id+'/info',{cache:'no-store'});
+ if(!resp.ok)throw Error('문서 생성 요청이 만료됐어. 봇에 이미지를 다시 올려 줘.');
+ const data=await resp.json();
+ $('schedule').value=data.initialText||'';render();
+}catch(e){status.textContent=e.message;btn.disabled=true;}
+btn.addEventListener('click',async()=>{
+ btn.disabled=true;status.textContent='문서를 생성하고 텔레그램으로 보내는 중이야.';
+ try{
+  const payload=Object.fromEntries(fields.map(k=>[k,$(k).value]));
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
+  let response;
+  try{response=await fetch('/api/document-job/'+id+'/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload),signal:controller.signal})}finally{clearTimeout(timer)}
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error||'문서 생성 실패');
+  status.textContent='완료! 텔레그램에서 새 문서 PNG를 확인해 줘.';
+ }catch(e){status.textContent='오류: '+e.message;btn.disabled=false;}
+});
+})();
+</script></body></html>
