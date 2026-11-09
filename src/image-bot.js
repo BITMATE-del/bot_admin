@@ -514,11 +514,13 @@ export function mountImageBot(app,base,pool){
         job.error=String(error.message||error).slice(0,240)+' · 실패한 편집은 차감하지 않아.';
         job.state='failed';
         console.error('image editor task:',job.error);
+        await send(job.chatId,'❌ 이미지 편집 실패\\n'+job.error+'\\n편집 이용권은 차감하지 않았어.').catch(console.error);
       }
     })().catch(async error=>{
       await credits.release(creditId).catch(console.error);
       job.state='failed';job.error=String(error.message||error).slice(0,240);
       console.error('image editor task unexpected:',error);
+      await send(job.chatId,'❌ 이미지 편집 오류\\n'+job.error+'\\n편집 이용권은 차감하지 않았어.').catch(console.error);
     });
   });
   const recent=new Map();
