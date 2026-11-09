@@ -404,7 +404,7 @@ app.get('/api/groups/:id/audit',auth,async(req,res,next)=>{try{const id=safeId(r
 app.post('/api/groups/:id/pin',auth,(req,res,next)=>{const mid=Number(req.body.message_id);if(!Number.isSafeInteger(mid)||mid<=0)return res.sendStatus(400);execute(req,res,next,'pin_message',{message_id:mid},'pinChatMessage',{message_id:mid,disable_notification:true})});
 app.post('/api/groups/:id/delete-message',auth,(req,res,next)=>{const mid=Number(req.body.message_id);if(!Number.isSafeInteger(mid)||mid<=0)return res.sendStatus(400);execute(req,res,next,'delete_message',{message_id:mid},'deleteMessage',{message_id:mid})});
 app.post('/api/groups/:id/lock',auth,(req,res,next)=>{if(typeof req.body.lock!=='boolean')return res.sendStatus(400);const lock=req.body.lock;execute(req,res,next,lock?'lock_chat':'unlock_chat',{lock},'setChatPermissions',{permissions:{can_send_messages:!lock,can_send_audios:!lock,can_send_documents:!lock,can_send_photos:!lock,can_send_videos:!lock,can_send_video_notes:!lock,can_send_voice_notes:!lock,can_send_polls:!lock,can_send_other_messages:!lock,can_add_web_page_previews:!lock,can_change_info:false,can_invite_users:!lock,can_pin_messages:false,can_manage_topics:false}})});
-const startImageBot=mountImageBot(app,base);
+const startImageBot=mountImageBot(app,base,pool);
 app.get('/image-editor',(_req,res)=>{
  res.set('Cache-Control','no-store');
  res.sendFile(path.join(path.dirname(fileURLToPath(import.meta.url)),'../public/image-editor.html'));
