@@ -163,33 +163,40 @@ const renderProgress=(data)=>{
    progressHint.textContent=data.etaBasis==='history'?'최근 완료 작업의 소요 시간 기준':'초기 추정 범위 · 실제 소요 시간은 달라질 수 있어.';
  }else{progressEta.textContent='처리 대기 중';progressHint.textContent='작업 단계를 확인하고 있어.';}
 };
+async function loadJobStatus(){
+ const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/status',{cache:'no-store'});
+ if(response.status===404)throw Error('편집 링크가 만료됐어. 새 이미지를 올려 줘.');
+ if(!response.ok)throw Error('작업 상태 조회 실패 ('+response.status+')');
+ return response.json();
+}
+function showJobStatus(data){
+ renderProgress(data);
+ if(data.state==='done'){
+  status.textContent='수정 완료! 텔레그램에서 이미지를 확인해 줘.';
+  return true;
+ }
+ if(data.state==='failed')throw Error(data.error||'이미지 수정에 실패했어.');
+ status.textContent=data.state==='ready'
+  ?'편집 요청이 아직 접수되지 않았어. 다시 전송해 줘.'
+  :'편집 진행 중이야. 화면 연결이 끊겨도 서버가 작업을 계속해.';
+ return false;
+}
 async function statusPoll(){
  let connectionErrors=0;
  for(let i=0;i<180;i++){
   await sleep(2000);
-  let response;
   try{
-   response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/status',{cache:'no-store'});
+   const data=await loadJobStatus();
+   connectionErrors=0;
+   if(showJobStatus(data))return;
   }catch(e){
+   if(!/fetch|network|Load failed|상태 조회/i.test(e.message||''))throw e;
    connectionErrors++;
-   status.textContent='상태 확인 연결이 잠시 끊겼어. 다시 확인 중이야.';
-   if(connectionErrors>=8)throw Error('서버 연결을 확인할 수 없어. 텔레그램에서 결과를 확인해 줘.');
-   continue;
+   status.textContent='상태 확인 연결이 불안정해. 서버 작업은 별도로 진행되며 텔레그램에도 결과가 전달돼.';
+   if(connectionErrors>=10)throw Error('상태 확인 연결을 여러 번 실패했어. 작업 완료 또는 실패 안내는 텔레그램에서 확인해 줘.');
   }
-  connectionErrors=0;
-  if(response.status===404)throw Error('편집 요청이 만료됐어. 이미지를 다시 보내줘.');
-  if(!response.ok)continue;
-  const data=await response.json();
-  renderProgress(data);
-  if(data.state==='done'){
-   status.textContent='수정 완료! 텔레그램에서 이미지를 확인해 줘.';
-   return;
-  }
-  if(data.state==='failed')throw Error(data.error||'이미지 수정에 실패했어.');
-  if(data.elapsedSeconds>=60)status.textContent='AI 편집이 계속 진행 중이야. 완료하면 텔레그램으로 전송돼.';
-  else status.textContent='수정 중이야. 결과는 텔레그램으로 전송돼.';
  }
- throw Error('작업 상태 확인 시간이 길어졌어. 텔레그램에서 결과를 확인해 줘.');
+ throw Error('상태 확인 시간이 초과됐어. 텔레그램에서 결과를 확인해 줘.');
 }
 sub.addEventListener('click',async()=>{
  if(!rect)return;
@@ -197,10 +204,25 @@ sub.addEventListener('click',async()=>{
  renderProgress({progress:5,message:'편집 요청 접수 중',elapsedSeconds:0});
  status.textContent='편집 요청을 접수하고 있어.';
  try{
-  const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/apply',{
-   method:'POST',headers:{'content-type':'application/json'},
-   body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
-  });
+  let response;
+  try{
+   response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/apply',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
+   });
+  }catch(error){
+   // Browser connection loss does not prove the server rejected the POST.
+   // First reconcile the job state; never silently submit a second request.
+   status.textContent='전송 연결이 잠시 끊겼어. 서버 접수 여부를 확인 중이야.';
+   let known=null;
+   try{known=await loadJobStatus()}catch{}
+   if(known && known.state==='done'){showJobStatus(known);return;}
+   if(known && known.state==='failed')showJobStatus(known);
+   if(known && ['reserving','preparing','editing','verifying','sending'].includes(known.state)){
+    await statusPoll();return;
+   }
+   throw Error('서버 접수 여부를 확인할 수 없어. 중복 편집을 피하려면 텔레그램의 완료/실패 안내를 확인해 줘.');
+  }
   const payload=await response.json();
   if(!response.ok){
     if(payload.code==='TEXT_REGION_TOO_NARROW'){
@@ -213,8 +235,10 @@ sub.addEventListener('click',async()=>{
   status.textContent='접수 완료. 작업 상태를 확인하고 있어.';
   await statusPoll();
  }catch(error){
-  status.textContent='오류: '+(error.message==='Failed to fetch'?'서버 연결이 끊겼어. 텔레그램에서 결과를 확인한 뒤 다시 시도해 줘.':error.message);
-  sub.disabled=false;
+  status.textContent='오류: '+error.message;
+  // For an uncertain network error, repeating the same job can trigger a
+  // duplicate operation. Refreshing the page is safer than resubmitting.
+  sub.disabled=/접수 여부를 확인할 수 없어|여러 번 실패|상태 확인 시간이 초과/.test(error.message);
  }
 });
 try{
