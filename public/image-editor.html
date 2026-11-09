@@ -76,10 +76,20 @@ function selectedAreaIsOccupied(r){
   return (light/n>.68&&dark/n>.0025&&dark>=2)||(light/n<=.68&&(dark+mid)/n>.42);
  }catch{return false;}
 }
+function fitLongerReplacement(box){
+ if(currentMode!=='edit')return box;
+ const oldLength=Array.from(before.value).length;
+ const newLength=Array.from(after.value).length;
+ if(newLength<=oldLength||!box||box.w<4||box.h<4)return box;
+ const needed=Math.ceil(newLength*box.h*.49);
+ // Keep the left edge fixed and grow right only if the image contains room.
+ return {...box,w:Math.min(canvas.width-box.x,Math.max(box.w,needed))};
+}
 function finalizeSelection(endPoint){
  if(!start){start=endPoint;}
  rect=selection(start,endPoint);
  if(currentMode==='add')rect=normalizeAdditionRect(rect);
+ else rect=fitLongerReplacement(rect);
  const longer=currentMode==='edit'&&Array.from(after.value).length>Array.from(before.value).length;
  const narrow=longer&&rect.w<Math.ceil(Array.from(after.value).length*rect.h*.49);
  const occupied=selectedAreaIsOccupied(rect);
@@ -88,7 +98,7 @@ function finalizeSelection(endPoint){
  }
  const invalid=currentMode==='add'?rect.w<70||rect.h<46||occupied:rect.w<4||rect.h<4||narrow;
  sub.disabled=invalid;
- sel.textContent=occupied?'기존 글자나 이미지와 겹쳐. 빈 공간을 다시 선택해 줘.':invalid?'영역을 조금 더 크게 잡아 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
+ sel.textContent=occupied?'기존 글자나 이미지와 겹쳐. 빈 공간을 다시 선택해 줘.':narrow?'새 문구가 길어. 원본 글자 오른쪽 여백까지 선택해 줘.':invalid?'영역을 조금 더 크게 잡아 줘.':'위치가 선택됐어. 파란 버튼을 눌러 전송해 줘.';
  status.textContent=occupied?'겹침 감지 · 원본 내용 보호 중':invalid?'영역 크기를 확인해 줘.':'선택 완료 · 전송할 수 있어.';
  active=false;start=null;draw();
 }
