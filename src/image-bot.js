@@ -6,7 +6,7 @@ import { createImageCredits } from './image-credits.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
-const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId) + '&v=20261109-5';
+const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId) + '&v=20261109-6';
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
@@ -476,16 +476,8 @@ export function mountImageBot(app,base,pool){
     if(String(req.body?.after||'')!==job.change.to)return res.status(400).json({error:'Unexpected replacement value'});
     const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
     if(!['x','y','w','h'].every(k=>Number.isInteger(values[k]))||!Number.isFinite(values.angle))return res.status(400).json({error:'Invalid edit selection'});
-    const originalChars=Array.from(job.change.from).length;
-    const replacementChars=Array.from(job.change.to).length;
-    // Do not silently cut off a longer label. Require a user-selected box
-    // with enough width for the additional characters at similar text height.
-    if(replacementChars>originalChars && values.w < Math.ceil(replacementChars*values.h*0.49)){
-      return res.status(409).json({
-        code:'TEXT_REGION_TOO_NARROW',
-        error:'변경할 글자가 더 길어 현재 선택 영역에서 잘릴 수 있어. 글자 양옆까지 더 넓게 선택해 줘.'
-      });
-    }
+    // Do not reject longer replacement text by character count. Actual
+    // clipping is checked against rendered output by image-region QA.
     job.state='reserving';job.error=null;
     let creditId;
     try{
