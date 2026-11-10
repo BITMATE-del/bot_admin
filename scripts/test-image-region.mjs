@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
-import {reviseDesignRegion} from '../src/ai-image-design.js';
 
 // Deterministic in-memory mock: regression tests must never send photos to external APIs.
 process.env.OPENAI_API_KEY='test-key-only';
+process.env.IMAGE_API_HOURLY_LIMIT='100'; // Mock-only runs; no external image calls.
+const {reviseDesignRegion}=await import('../src/ai-image-design.js');
 const W=180,H=110;
 const source=await sharp({
   create:{width:W,height:H,channels:4,background:{r:215,g:225,b:235,alpha:1}}
