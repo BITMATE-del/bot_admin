@@ -66,7 +66,7 @@ try{
   globalThis.fetch=async()=>new Response(JSON.stringify({data:[{b64_json:flatDark.toString('base64')}]}),{status:200});
   await assert.rejects(
     ()=>reviseDesignRegion(source,{x:25,y:20,w:50,h:30},'Edit graphic'),
-    /검은 단색 영역/
+    /검은색으로 지워/
   );
   globalThis.fetch=async()=>new Response(JSON.stringify({data:[{b64_json:aiOutput.toString('base64')}]}),{status:200});
   // A fully transparent response must never be delivered as a black patch.
