@@ -222,25 +222,36 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   // mistaken for failed edits.
   const originalRegion=await sharp(upright)
     .extract({left:x,top:y,width:w,height:h}).ensureAlpha().raw().toBuffer();
-  let outputDark=0,sourceDark=0,outputR=0,outputG=0,outputB=0;
-  let outputR2=0,outputG2=0,outputB2=0;
+  let outputDark=0,sourceDark=0,outputSum=0,outputSq=0,sourceSum=0,sourceSq=0;
   const pixelCount=w*h;
   for(let i=0;i<bytes.length;i+=channels){
     const r=bytes[i],g=bytes[i+1],b=bytes[i+2];
     if(Math.max(r,g,b)<38)outputDark++;
     if(Math.max(originalRegion[i],originalRegion[i+1],originalRegion[i+2])<38)sourceDark++;
-    outputR+=r;outputG+=g;outputB+=b;
-    outputR2+=r*r;outputG2+=g*g;outputB2+=b*b;
+    for(let c=0;c<3;c++){
+      const o=bytes[i+c],a=originalRegion[i+c];
+      outputSum+=o;outputSq+=o*o;
+      sourceSum+=a;sourceSq+=a*a;
+    }
   }
-  const variance=Math.max(0,
-    (outputR2+outputG2+outputB2)/(pixelCount*3)-
-    (outputR*outputR+outputG*outputG+outputB*outputB)/(pixelCount*pixelCount*3)
-  );
-  // Solid dark output does not contain usable replacement detail.
-  // Reject it regardless of the source brightness; otherwise dark-themed
-  // source images can incorrectly pass the old sourceDark threshold.
-  if(outputDark/pixelCount>.82 && variance<350){
-    throw new Error('AI 결과가 검은 단색 영역으로 출력되어 전송을 중단했어. 원본을 유지하고 다시 시도해 줘.');
+  // Compute RGB population variance correctly. The old implementation
+  // subtracted three times the squared mean and collapsed most variances
+  // to zero, incorrectly flagging normal dark-themed text panels as black.
+  const n=3*pixelCount;
+  const variance=Math.max(0,outputSq/n-(outputSum/n)**2);
+  const sourceVariance=Math.max(0,sourceSq/n-(sourceSum/n)**2);
+  const darkFraction=outputDark/pixelCount,sourceDarkFraction=sourceDark/pixelCount;
+  console.info('image edit region quality',JSON.stringify({
+    width:w,height:h,darkFraction:+darkFraction.toFixed(3),
+    sourceDarkFraction:+sourceDarkFraction.toFixed(3),
+    variance:Math.round(variance),sourceVariance:Math.round(sourceVariance)
+  }));
+  // A genuinely black generated patch is unusable when the original
+  // region is visibly brighter. An already-dark background must not be
+  // rejected solely for being dark; later glyph and change checks still run.
+  if(darkFraction>.94 && variance<75 &&
+     (sourceDarkFraction<.55 || sourceVariance>Math.max(500,variance*8))){
+    throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
   }
   const labelOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
     .ensureAlpha().raw().toBuffer();
