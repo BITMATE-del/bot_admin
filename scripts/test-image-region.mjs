@@ -68,6 +68,32 @@ try{
     ()=>reviseDesignRegion(source,{x:25,y:20,w:50,h:30},'Edit graphic'),
     /검은색으로 지워/
   );
+  // Regression: a black masked result gets one unmasked retry. A valid
+  // second result is accepted without touching pixels outside the selection.
+  let fallbackCalls=0;
+  globalThis.fetch=async(_url,options)=>{
+    fallbackCalls++;
+    assert.equal(Boolean(options.body.get('mask')),fallbackCalls===1,
+      'Retry must omit mask only after the failed masked attempt');
+    return new Response(JSON.stringify({data:[{
+      b64_json:(fallbackCalls===1?flatDark:aiOutput).toString('base64')
+    }]}),{status:200});
+  };
+  const fallbackSelection={x:25,y:20,w:50,h:30};
+  const recovered=await reviseDesignRegion(source,fallbackSelection,'Retouch a small graphic detail');
+  assert.equal(fallbackCalls,2,'Black result should trigger exactly one unmasked retry');
+  const [recoveredData,sourceData]=await Promise.all([
+    sharp(recovered).ensureAlpha().raw().toBuffer(),
+    sharp(source).ensureAlpha().raw().toBuffer()
+  ]);
+  for(let yy=0;yy<H;yy++)for(let xx=0;xx<W;xx++){
+    const i=(yy*W+xx)*4;
+    const inside=xx>=fallbackSelection.x&&xx<fallbackSelection.x+fallbackSelection.w
+      &&yy>=fallbackSelection.y&&yy<fallbackSelection.y+fallbackSelection.h;
+    if(!inside)assert.deepEqual(
+      [...recoveredData.subarray(i,i+4)],[...sourceData.subarray(i,i+4)],
+      'Unmasked retry must not alter pixels outside the selected rectangle');
+  }
   globalThis.fetch=async()=>new Response(JSON.stringify({data:[{b64_json:aiOutput.toString('base64')}]}),{status:200});
   // A fully transparent response must never be delivered as a black patch.
   const transparent=await sharp({create:{width:1024,height:1024,channels:4,background:{r:0,g:0,b:0,alpha:0}}}).png().toBuffer();
