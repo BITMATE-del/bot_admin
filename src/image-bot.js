@@ -399,20 +399,41 @@ async function handle(update,base,credits){
   }
   if(changes.length>1) {await send(chatId,'현재 정밀 영역 수정은 한 번에 한 곳씩 지원해. 첫 번째 변경부터 진행해 줘.');return;}
   await tg('sendChatAction',{chat_id:chatId,action:'upload_document'});
-  await send(chatId,'요청을 받았어. 이미지 위치를 확인하고 있어.');
-  const balance=await credits.status(msg.from.id);
-  if(balance.remaining<1){await send(chatId,'체험 횟수를 모두 사용했어. /잔여횟수 로 확인해 줘.');return;}
+  // Provide the manual picker BEFORE potentially slow OCR initialization.
+  // The user can proceed even if OCR stalls, times out, or fails.
+  let balance;
+  try { balance=await credits.status(msg.from.id); }
+  catch(e){
+    console.error('image credits check failed:',e.message);
+    await send(chatId,'편집 이용권을 확인하지 못했어. 잠시 후 다시 시도해 줘.');
+    return;
+  }
+  if(balance.remaining<1){
+    await send(chatId,'체험 횟수를 모두 사용했어. /잔여횟수 로 확인해 줘.');
+    return;
+  }
   const manualId=makeManualJob(chatId,saved.buf,changes[0],msg.from.id);
-  try{
-    const {output,preview,regions}=await replaceText(saved.buf,changes);
-    const id=crypto.randomBytes(8).toString('hex');
-    pending.set(String(msg.from.id),{id,chatId,output,regions,buf:saved.buf,change:changes[0],created:Date.now()});
-    await sendPreview(chatId,preview,id,editorUrl(manualId));
-    await send(chatId,'직접 위치 선택 링크: '+editorUrl(manualId)+'\n버튼으로 열리지 않으면 주소를 복사해 브라우저에서 열어줘.');
-  }catch(e){
-    console.warn('OCR preview unavailable; offering manual selection:',e.message);
-    await send(chatId,'자동 위치 인식이 정확하지 않아 직접 선택 모드로 전환했어.');
-    await sendManualLink(chatId,manualId,base);
+  await sendManualLink(chatId,manualId,base);
+  // Optional OCR previews must never block selection. The preview is an
+  // enhancement only, and is disabled by default because Korean OCR warmup
+  // can be slower than an interactive request, especially on cold starts.
+  if(process.env.IMAGE_OCR_PREVIEW_ENABLED==='true'){
+    const timeoutMs=8000;
+    let timeout;
+    try{
+      const outcome=await Promise.race([
+        replaceText(saved.buf,changes),
+        new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('OCR_TIMEOUT')),timeoutMs);})
+      ]);
+      const {output,preview,regions}=outcome;
+      const id=crypto.randomBytes(8).toString('hex');
+      pending.set(String(msg.from.id),{id,chatId,output,regions,buf:saved.buf,change:changes[0],created:Date.now()});
+      await sendPreview(chatId,preview,id,editorUrl(manualId));
+    }catch(e){
+      console.warn('Optional OCR preview skipped; manual editor remains available:',e.message);
+    }finally{
+      clearTimeout(timeout);
+    }
   }
 }
 export function mountImageBot(app,base,pool){
