@@ -184,16 +184,54 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   const rgba=Buffer.alloc(1024*1024*4,255);
   for(let i=0;i<transparency.length;i++)rgba[i*4+3]=transparency[i];
   const mask=await sharp(rgba,{raw:{width:1024,height:1024,channels:4}}).png().toBuffer();
-  const generated=await invoke(crop,instruction,mask);
-  // Materialize each resize before extraction: sharp otherwise may reorder
-  // extract operations and attempt cropping at incompatible source dimensions.
-  const generatedAt1024=await sharp(generated).resize(1024,1024,{fit:'fill'}).png().toBuffer();
-  const contextualPatch=await sharp(generatedAt1024)
-    .extract({left:offsetX,top:offsetY,width:fitW,height:fitH}).png().toBuffer();
-  const fitted=await sharp(contextualPatch).resize(cropW,cropH,{fit:'fill'}).png().toBuffer();
-  const patch=await sharp(fitted)
-    .extract({left:x-cropLeft,top:y-cropTop,width:w,height:h})
-    .ensureAlpha().raw().toBuffer({resolveWithObject:true});
+  // The masked image endpoint can occasionally return solid black inside
+  // an alpha-0 mask. If it does, retry once as an unmasked contextual edit.
+  // Only the user's chosen rectangle is ever composited onto the original.
+  const extractPatch=async generated=>{
+    const at1024=await sharp(generated).resize(1024,1024,{fit:'fill'}).png().toBuffer();
+    const contextual=await sharp(at1024)
+      .extract({left:offsetX,top:offsetY,width:fitW,height:fitH}).png().toBuffer();
+    const fitted=await sharp(contextual).resize(cropW,cropH,{fit:'fill'}).png().toBuffer();
+    return sharp(fitted)
+      .extract({left:x-cropLeft,top:y-cropTop,width:w,height:h})
+      .ensureAlpha().raw().toBuffer({resolveWithObject:true});
+  };
+  const patchStats=raw=>{
+    let dark=0,transparent=0,sum=0,sq=0;
+    const n=w*h;
+    for(let i=0;i<raw.data.length;i+=4){
+      const r=raw.data[i],g=raw.data[i+1],b=raw.data[i+2];
+      if(Math.max(r,g,b)<38)dark++;
+      if(raw.data[i+3]<16)transparent++;
+      for(const value of [r,g,b]){sum+=value;sq+=value*value;}
+    }
+    return {dark:dark/n,transparent:transparent/n,
+      variance:Math.max(0,sq/(3*n)-(sum/(3*n))**2)};
+  };
+  let generated=await invoke(crop,instruction,mask);
+  let patch=await extractPatch(generated);
+  let firstStats=patchStats(patch);
+  if(firstStats.dark>.94&&firstStats.variance<100){
+    console.warn('masked edit produced nearly solid black region; trying one unmasked contextual edit',
+      JSON.stringify({width:w,height:h,dark:+firstStats.dark.toFixed(3),
+        variance:Math.round(firstStats.variance)}));
+    // A precise relative location helps the unmasked call focus on the target.
+    const relativeX=Math.round(maskX/1024*100),relativeY=Math.round(maskY/1024*100);
+    const relativeW=Math.round(maskW/1024*100),relativeH=Math.round(maskH/1024*100);
+    const fallbackInstruction=instruction+
+      ' The image contains the original layout. Edit only the small rectangle at '+
+      relativeX+'% from left, '+relativeY+'% from top, width '+relativeW+
+      '% and height '+relativeH+'% of this image. Replace the text there; '+
+      'keep its background, color and scale intact. Do not create a blank, '+
+      'black, or solid-color patch. Preserve everything else exactly.';
+    generated=await invoke(crop,fallbackInstruction,null);
+    patch=await extractPatch(generated);
+    const recovered=patchStats(patch);
+    console.info('unmasked fallback region quality',JSON.stringify({
+      width:w,height:h,dark:+recovered.dark.toFixed(3),
+      variance:Math.round(recovered.variance)
+    }));
+  }
   // An image edit response can contain transparent pixels whose RGB channels
   // are black. Reject such output before compositing rather than displaying
   // transparent/black rectangles to the user.
