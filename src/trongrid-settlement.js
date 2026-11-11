@@ -67,8 +67,8 @@ export function createTronGridSettlement(pool,notify){
    ALTER TABLE image_shop_orders ADD COLUMN IF NOT EXISTS auto_match BOOLEAN NOT NULL DEFAULT FALSE;
    CREATE UNIQUE INDEX IF NOT EXISTS image_active_payment_amount_uniq
     ON image_shop_orders(payment_asset,payment_amount,payment_address)
-    WHERE state='pending' AND auto_match=TRUE;
-   UPDATE image_shop_settings SET usdt_trc20_address=$1,trx_address=$1 WHERE singleton=TRUE`,[WALLET]);
+    WHERE state='pending' AND auto_match=TRUE;`);
+  await pool.query('UPDATE image_shop_settings SET usdt_trc20_address=$1,trx_address=$1 WHERE singleton=TRUE',[WALLET]);
  }
  async function check(){
   if(!key()||running)return;
