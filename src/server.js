@@ -419,6 +419,7 @@ async function ensureImageBotWebhook(){
   for(let attempt=1;;attempt++){
     try{
       await startImageBot();
+      commerce.startWatcher();
       console.log('Image editor bot webhook ready');
       return;
     }catch(e){
