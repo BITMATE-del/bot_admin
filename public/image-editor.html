@@ -165,7 +165,7 @@ const renderProgress=(data)=>{
 };
 async function loadJobStatus(){
  const response=await fetch('/api/image-job/'+encodeURIComponent(job)+'/status',{cache:'no-store'});
- if(response.status===404)throw Error('편집 링크가 만료됐어. 새 이미지를 올려 줘.');
+ if(response.status===404)throw Error('편집 작업을 찾지 못했어. 서버 재시작으로 작업이 초기화됐을 수 있어. 기존 링크를 다시 열어도 복원되지 않으면 새 이미지를 올려 줘.');
  if(!response.ok)throw Error('작업 상태 조회 실패 ('+response.status+')');
  return response.json();
 }
@@ -243,7 +243,8 @@ sub.addEventListener('click',async()=>{
 });
 try{
  if(!/^[0-9a-f]{32}$/.test(job||''))throw Error('링크가 올바르지 않아.');
- const r=await fetch('/api/image-job/'+job+'/info');if(!r.ok)throw Error('편집 링크가 만료됐어. 봇에서 다시 요청해 줘.');
+ const r=await fetch('/api/image-job/'+job+'/info');if(r.status===404)throw Error('편집 작업을 찾지 못했어. 서버 재시작으로 작업이 초기화됐을 수 있어. 봇에서 새 편집 링크를 발급해 줘.');
+ if(!r.ok)throw Error('편집 서버 연결에 문제가 있어 ('+r.status+'). 잠시 후 다시 열어 줘.');
  const info=await r.json();before.value=info.before;after.value=info.after;
  const sourcePath='/api/image-job/'+encodeURIComponent(job)+'/original';
  document.getElementById('sourceFileLink').href=sourcePath;
