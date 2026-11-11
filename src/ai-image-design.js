@@ -415,7 +415,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
         return reviseDesignRegion(sourceBuffer,selection,
           instruction+' CRITICAL: Place every replaced glyph entirely within the selected box. Leave clear space at its RIGHT boundary; do not clip the final digit or Korean character. Keep source glyph size, baseline, and background unchanged.',1);
       }
-      throw new Error('수정한 글자가 선택 영역 오른쪽에서 실제로 잘릴 위험이 있어. 원본을 유지했어. 다음 시도에서는 오른쪽 여백까지 더 넓게 선택해 줘.');
+      throw new Error('수정한 글자가 선택 영역 오른쪽 경계에서 잘릴 위험이 있어. 원본을 유지했어. 다음 시도에서는 오른쪽 여백까지 더 넓게 선택해 줘.');
     }
   }
   const mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
