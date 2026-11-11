@@ -502,7 +502,6 @@ async function handle(update,base,credits,commerce,adminMenu){
     ];
     if(await adminMenu.isAdmin(msg.from.id))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
     await sendGuidePhoto(chatId,buttons);
-    await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
     return;
   }
   if(['/잔여횟수','/balance','/credits'].includes(msg.text?.trim())){
