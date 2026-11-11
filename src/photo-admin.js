@@ -187,7 +187,22 @@ export function mountPhotoAdmin(app,pool){
    await client.query('INSERT INTO image_admin_audit(action,uid,details) VALUES($1,$2,$3)',[
     'order_'+decision,order.uid,JSON.stringify({order_id:id,credits:order.credits,price_krw:order.price_krw})]);
    await client.query('COMMIT');
-   res.json({ok:true,uid:String(order.uid),credits:order.credits,state:decision});
+   // Notify only after committing the balance change. Notification failures
+   // never roll back or repeat a completed financial action.
+   let notified=false;
+   if(process.env.IMAGE_BOT_TOKEN){
+    try{
+     const caption=decision==='approved'
+      ?'✅ 이용권 구매 승인\\n신청 #'+id+'\\n'+order.package_name+' / '+order.credits+'P가 지급됐어.\\n/잔여횟수 로 확인해 줘.'
+      :'❌ 이용권 구매 신청 거절\\n신청 #'+id+'\\n문의사항이 있으면 관리자에게 연락해 줘.';
+     const response=await fetch('https://api.telegram.org/bot'+process.env.IMAGE_BOT_TOKEN+'/sendMessage',{
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({chat_id:String(order.uid),text:caption}),signal:AbortSignal.timeout(12000)
+     });
+     notified=Boolean((await response.json()).ok);
+    }catch(e){console.warn('order notification failed:',e.message)}
+   }
+   res.json({ok:true,uid:String(order.uid),credits:order.credits,state:decision,notified});
   }catch(e){await client.query('ROLLBACK').catch(()=>{});error(res,e);}finally{client.release();}
  });
  app.get('/api/photo-admin/audit',requireAdmin,async(req,res)=>{
@@ -204,6 +219,8 @@ export function mountPhotoAdmin(app,pool){
   const c=await pool.connect();
   try{
    await c.query('BEGIN');await ensureTx(c,uid);
+   const account=(await c.query('SELECT is_blocked FROM image_credit_accounts WHERE uid=$1 FOR UPDATE',[uid])).rows[0];
+   if(account?.is_blocked)throw Error('이용이 제한된 계정은 구매 신청을 할 수 없습니다.');
    const shop=(await c.query('SELECT enabled,instructions FROM image_shop_settings WHERE singleton=TRUE')).rows[0];
    if(!shop?.enabled||!shop.instructions)throw Error('현재 이용권 판매가 준비 중입니다.');
    const pack=(await c.query('SELECT * FROM image_shop_packages WHERE id=$1 AND active=TRUE AND price_krw>0',[packageId])).rows[0];
