@@ -233,5 +233,11 @@ export function mountPhotoAdmin(app,pool){
    return {id:result.rows[0].id,credits:pack.credits,name:pack.name,price_krw:pack.price_krw,instructions:shop.instructions};
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
- return {init,storefront,order,credits};
+ async function ordersFor(uid){
+  const id=safeUid(uid);if(!id)throw Error('UID가 올바르지 않습니다.');
+  const r=await pool.query(`SELECT id,package_name,credits,price_krw,state,created_at,decided_at
+   FROM image_shop_orders WHERE uid=$1 ORDER BY id DESC LIMIT 10`,[id]);
+  return r.rows;
+ }
+ return {init,storefront,order,ordersFor,credits};
 }
