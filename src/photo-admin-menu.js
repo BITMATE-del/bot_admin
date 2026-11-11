@@ -47,9 +47,9 @@ export function createPhotoAdminMenu(ops,tg,send){
     '\n이용권: '+fmt(o.credits)+'매\n기준 가격: '+fmt(o.price_usdt)+' USDT'+
     '\n결제: '+fmt(o.payment_amount)+' '+o.payment_asset+
     '\n지갑: '+o.payment_address+
-    '\n\n※ 블록체인 입금액·네트워크·거래내역을 실제 확인한 뒤 승인하세요.',[
-      [{text:'✅ 입금 확인·승인',callback_data:'pa:confirm:approved:'+o.id},
-       {text:'❌ 거절',callback_data:'pa:confirm:rejected:'+o.id}],...back]);
+    (o.auto_match?'\n\n🔄 TronGrid에서 확정 입금을 자동 조회 중입니다. 승인 시 자동 지급됩니다.':'\n\n※ 수동 주문: 입금 확인 후 관리자 승인'),[
+      ...(o.auto_match?[]:[[{text:'✅ 입금 확인·승인',callback_data:'pa:confirm:approved:'+o.id}]]),
+      [{text:'❌ 신청 거절',callback_data:'pa:confirm:rejected:'+o.id}],...back]);
   }
  }
  async function products(chat,actor){
