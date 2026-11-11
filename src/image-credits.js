@@ -22,6 +22,8 @@ export function createImageCredits(pool){
     source TEXT NOT NULL DEFAULT 'edit',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,finished_at TIMESTAMPTZ);
    CREATE INDEX IF NOT EXISTS image_credit_usage_uid_idx ON image_credit_usage(uid,state,expires_at);
+   ALTER TABLE image_credit_usage DROP CONSTRAINT IF EXISTS image_credit_usage_credit_type_check;
+   ALTER TABLE image_credit_usage ADD CONSTRAINT image_credit_usage_credit_type_check CHECK(credit_type IN ('trial','paid','point'));
    CREATE TABLE IF NOT EXISTS image_system_migrations(id TEXT PRIMARY KEY,applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());`);
   // Older users were granted three trial edits. Reduce these grants to one
   // exactly once, preserving used historical entries and explicit admin edits.
