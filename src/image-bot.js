@@ -761,7 +761,8 @@ export function mountImageBot(app,base,pool,commerce){
       verifying:[85,'편집 결과 파일 검수 중'],
       sending:[95,'텔레그램으로 결과 전송 중'],
       done:[100,'수정 완료'],
-      failed:[0,'수정 실패']
+      failed:[0,'수정 실패'],
+      interrupted:[0,'서버 교체로 작업 중단']
     };
     const state=job.state||'ready';
     const [progress,message]=stages[state]||stages.ready;
