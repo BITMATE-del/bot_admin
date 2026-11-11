@@ -14,6 +14,48 @@ const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURICompon
 const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
+const JOB_TABLE='image_edit_temporary_jobs';
+async function ensureTemporaryJobs(pool){
+  await pool.query(`CREATE TABLE IF NOT EXISTS image_edit_temporary_jobs (
+    id varchar(32) PRIMARY KEY,
+    chat_id text NOT NULL,
+    uid text NOT NULL,
+    image_bytes bytea,
+    source_text text NOT NULL,
+    target_text text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    state text NOT NULL DEFAULT 'ready',
+    error text
+  )`);
+  await pool.query("DELETE FROM image_edit_temporary_jobs WHERE created_at < NOW() - INTERVAL '30 minutes'");
+}
+async function storeTemporaryJob(pool,job){
+  await pool.query(`INSERT INTO image_edit_temporary_jobs
+    (id,chat_id,uid,image_bytes,source_text,target_text,created_at,state)
+    VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7 / 1000.0),'ready')`,
+    [job.id,String(job.chatId),job.uid,job.buf,job.change.from,job.change.to,job.created]);
+}
+async function readTemporaryJob(pool,id){
+  if(!/^[a-f0-9]{32}$/.test(String(id||'')))return null;
+  const {rows}=await pool.query(`SELECT id,chat_id,uid,image_bytes,source_text,target_text,
+    (extract(epoch from created_at)*1000)::bigint AS created_ms,state,error
+    FROM image_edit_temporary_jobs
+    WHERE id=$1 AND created_at > NOW() - INTERVAL '30 minutes'`,[id]);
+  const row=rows[0];
+  if(!row)return null;
+  // A restarted worker cannot reliably resume an image API call. A previously
+  // claimed job is never silently replayed, so billing cannot be duplicated.
+  const state=['ready','done','failed'].includes(row.state)?row.state:'interrupted';
+  return {id:row.id,chatId:row.chat_id,uid:row.uid,buf:row.image_bytes,
+    change:{from:row.source_text,to:row.target_text},
+    created:Number(row.created_ms),state,error:row.error||(
+      state==='interrupted'?'서버가 교체되어 이전 편집 작업이 중단됐어. 중복 처리를 막기 위해 같은 작업은 자동 재실행하지 않아.':''
+    )};
+}
+async function setTemporaryJobState(pool,id,state,error=null){
+  await pool.query('UPDATE image_edit_temporary_jobs SET state=$2,error=$3 WHERE id=$1',[id,state,error]);
+}
+
 const successfulEditDurations=[];
 const FREE_PASS_GROUP='@angggggaggg';
 const FREE_PASS_LINK='https://t.me/angggggaggg';
@@ -301,9 +343,11 @@ async function download(fileId){
   return Buffer.from(arr);
 }
 
-function makeManualJob(chatId,buf,change,uid){
+async function makeManualJob(chatId,buf,change,uid,pool){
   const id=crypto.randomBytes(16).toString('hex');
-  manualJobs.set(id,{id,chatId,uid:String(uid),buf,change,created:Date.now(),busy:false});
+  const job={id,chatId,uid:String(uid),buf,change,created:Date.now(),busy:false,state:'ready'};
+  await storeTemporaryJob(pool,job);
+  manualJobs.set(id,job);
   return id;
 }
 async function manualEdit(buf,{x,y,w,h,after,angle}){
@@ -441,7 +485,7 @@ async function verifyFreePass(chatId,uid,credits){
  await send(chatId,'🎉 그룹 가입 확인 완료!\n첫 무료 편집 이용권 1회가 지급됐어.\n이용권은 UID당 평생 한 번만 지급돼.');
  await sendBalance(chatId,uid,credits,'무료 이용권 지급 완료');
 }
-async function handle(update,base,credits,commerce,adminMenu){
+async function handle(update,base,credits,commerce,adminMenu,pool){
   if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
   if(cb?.data==='ui:home'){
@@ -648,7 +692,7 @@ async function handle(update,base,credits,commerce,adminMenu){
     await send(chatId,'편집 이용권이 부족해. /이용권구매 에서 추가 구매를 신청할 수 있어.');
     return;
   }
-  const manualId=makeManualJob(chatId,saved.buf,changes[0],msg.from.id);
+  const manualId=await makeManualJob(chatId,saved.buf,changes[0],msg.from.id,pool);
   await sendManualLink(chatId,manualId,base);
   // Optional OCR previews must never block selection. The preview is an
   // enhancement only, and is disabled by default because Korean OCR warmup
@@ -677,13 +721,15 @@ export function mountImageBot(app,base,pool,commerce){
   const adminMenu=createPhotoAdminMenu(commerce.telegramAdmin,tg,send);
   if(!token){console.log('Image bot disabled (IMAGE_BOT_TOKEN absent)');return async()=>{};}
   const secret=crypto.createHash('sha256').update(token+':image-webhook').digest('hex');
-  const getManual=req=>{
-    const job=manualJobs.get(req.params.id);
-    if(!job||Date.now()-job.created>ttl)return null;
-    return job;
+  const getManual=async req=>{
+    const cached=manualJobs.get(req.params.id);
+    if(cached&&Date.now()-cached.created<=ttl)return cached;
+    const restored=await readTemporaryJob(pool,req.params.id);
+    if(restored)manualJobs.set(restored.id,restored);
+    return restored;
   };
   app.get('/api/image-job/:id/info',async(req,res)=>{
-    const job=getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
+    const job=await getManual(req);if(!job)return res.status(404).json({error:'요청이 만료됐습니다.'});
     try{
       // Ship a browser-safe, opaque JPEG preview inline to avoid broken
       // PNG/image subrequests. The original buffer remains unchanged for output.
@@ -699,13 +745,13 @@ export function mountImageBot(app,base,pool,commerce){
     }
   });
   app.get('/api/image-job/:id/original',async(req,res)=>{
-    const job=getManual(req);if(!job)return res.sendStatus(404);
+    const job=await getManual(req);if(!job)return res.sendStatus(404);
     res.set('Cache-Control','no-store').type('png');
     try{res.send(await sharp(job.buf).rotate().png().toBuffer());}catch{res.sendStatus(500);}
   });
 
-  app.get('/api/image-job/:id/status',(req,res)=>{
-    const job=getManual(req);
+  app.get('/api/image-job/:id/status',async(req,res)=>{
+    const job=await getManual(req);
     if(!job)return res.status(404).json({state:'expired',progress:0,message:'편집 요청이 만료됐어.'});
     const stages={
       ready:[0,'수정 위치 선택 대기'],
@@ -727,7 +773,7 @@ export function mountImageBot(app,base,pool,commerce){
     });
   });
   app.post('/api/image-job/:id/apply',async(req,res)=>{
-    const job=getManual(req);
+    const job=await getManual(req);
     if(!job)return res.status(404).json({error:'Expired edit request'});
     if(['reserving','preparing','editing','verifying','sending'].includes(job.state))return res.status(202).json({state:job.state});
     if(job.state==='done')return res.json({state:'done'});
@@ -736,20 +782,31 @@ export function mountImageBot(app,base,pool,commerce){
     if(!['x','y','w','h'].every(k=>Number.isInteger(values[k]))||!Number.isFinite(values.angle))return res.status(400).json({error:'Invalid edit selection'});
     // Do not reject longer replacement text by character count. Actual
     // clipping is checked against rendered output by image-region QA.
+    // Claim the job atomically across old/new Railway containers.
+    // A replay cannot reserve credits or spawn a second paid image edit.
+    const claimed=await pool.query(`UPDATE image_edit_temporary_jobs
+      SET state='reserving',error=NULL
+      WHERE id=$1 AND state='ready'
+        AND created_at > NOW() - INTERVAL '30 minutes'
+      RETURNING id`,[job.id]);
+    if(!claimed.rowCount)return res.status(409).json({error:'이미 처리 중이거나 중단된 작업이야. 중복 편집은 허용하지 않아.'});
     job.state='reserving';job.error=null;
     let creditId;
     try{
       const reservation=await credits.reserve(job.uid,'manual_region',job.change.from+' → '+job.change.to);
       if(!reservation.ok){
         job.state='failed';job.error='편집 이용권 잔여 횟수가 없어. /잔여횟수 로 확인해 줘.';
+        await setTemporaryJobState(pool,job.id,'failed',job.error);
         return res.status(402).json({error:job.error,code:'NO_CREDITS'});
       }
       creditId=reservation.id;
     }catch(error){
       job.state='failed';job.error='이용권 확인에 실패했어. 다시 시도해 줘.';
+      await setTemporaryJobState(pool,job.id,'failed',job.error);
       return res.status(503).json({error:job.error});
     }
     job.state='preparing';job.startedAt=Date.now();
+    await setTemporaryJobState(pool,job.id,'preparing');
     res.status(202).json({state:'preparing',progress:15});
     (async()=>{
       try{
@@ -761,6 +818,7 @@ export function mountImageBot(app,base,pool,commerce){
         await sendOriginalAndEdit(job.chatId,job.buf,output);
         await credits.consume(creditId);
         job.state='done';
+        await setTemporaryJobState(pool,job.id,'done');
         await sendBalance(job.chatId,job.uid,credits,'편집 완료 · 남은 이용권').catch(console.error);
         if(job.startedAt){
           const secs=Math.max(1,Math.round((Date.now()-job.startedAt)/1000));
@@ -771,12 +829,14 @@ export function mountImageBot(app,base,pool,commerce){
         await credits.release(creditId).catch(console.error);
         job.error=String(error.message||error).slice(0,240)+' · 실패한 편집은 차감하지 않아.';
         job.state='failed';
+        await setTemporaryJobState(pool,job.id,'failed',job.error).catch(console.error);
         console.error('image editor task:',job.error);
         await send(job.chatId,'❌ 이미지 편집 실패\n'+job.error+'\n편집 이용권은 차감하지 않았어.').catch(console.error);
       }
     })().catch(async error=>{
       await credits.release(creditId).catch(console.error);
       job.state='failed';job.error=String(error.message||error).slice(0,240);
+      await setTemporaryJobState(pool,job.id,'failed',job.error).catch(console.error);
       console.error('image editor task unexpected:',error);
       await send(job.chatId,'❌ 이미지 편집 오류\n'+job.error+'\n편집 이용권은 차감하지 않았어.').catch(console.error);
     });
@@ -797,10 +857,11 @@ export function mountImageBot(app,base,pool,commerce){
       if(chatId)try{await send(chatId,'수정 실패: '+String(e.message).slice(0,200));}catch{}
     });
   });
-  const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,s] of manualJobs)if(Date.now()-s.created>ttl)manualJobs.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);for(const [id,v] of purchasePending)if(Date.now()-v.created>15*60*1000)purchasePending.delete(id);},60000);
+  const sweep=setInterval(()=>{pool.query("DELETE FROM image_edit_temporary_jobs WHERE created_at < NOW() - INTERVAL '30 minutes'").catch(console.error);for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,s] of manualJobs)if(Date.now()-s.created>ttl)manualJobs.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);for(const [id,v] of purchasePending)if(Date.now()-v.created>15*60*1000)purchasePending.delete(id);},60000);
   sweep.unref();
   return async()=>{
     await credits.init();
+    await ensureTemporaryJobs(pool);
     const me=await tg('getMe');
     await tg('setWebhook',{url:base+'/telegram/image-webhook',secret_token:secret,allowed_updates:['message','callback_query'],drop_pending_updates:false});
     console.log('Image editor bot started @'+me.username);
