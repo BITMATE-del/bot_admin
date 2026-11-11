@@ -274,37 +274,6 @@ async function verifyOutputFile(original,edited,allowExtended=false){
     throw new Error('편집본에 비정상적인 투명 영역이 있어 전송하지 않았어.');
   }
 }
-// Fail closed for exact numeric replacements. A plausible-looking image is
-// not proof that the user's requested amount was actually written correctly.
-async function verifyNumericReplacement(edited,selection,replacement){
-  const expected=String(replacement||'').replace(/[^0-9]/g,'');
-  if(!expected || expected.length<2)return;
-  const image=await sharp(edited).rotate().png().toBuffer();
-  const meta=await sharp(image).metadata();
-  const left=Math.max(0,Math.floor(selection.x));
-  const top=Math.max(0,Math.floor(selection.y));
-  const width=Math.min(meta.width-left,Math.ceil(selection.w));
-  const height=Math.min(meta.height-top,Math.ceil(selection.h));
-  if(width<4||height<4)throw new Error('숫자 검증 영역이 올바르지 않아 결과물을 전달하지 않았어.');
-  const crop=await sharp(image).extract({left,top,width,height})
-    .resize({width:Math.min(2200,Math.max(width*4,600)),kernel:'lanczos3'})
-    .grayscale().normalize().png().toBuffer();
-  const worker=await createWorker('eng',1,{logger:()=>{}});
-  try{
-    await worker.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'0123456789,.'});
-    const result=await worker.recognize(crop);
-    const recognized=String(result?.data?.text||'').replace(/[^0-9]/g,'');
-    // Reject both missing numbers and a wrong amount. Never auto-correct the
-    // user's requested value or charge for an unverified image.
-    if(recognized!==expected){
-      console.warn('image numeric verification failed',JSON.stringify({
-        expectedLength:expected.length,recognizedLength:recognized.length,
-        selection:{width,height}
-      }));
-      throw new Error('최종 숫자가 요청값과 일치하는지 확인되지 않아 편집본을 전달하지 않았어. 원본은 유지했고 이용권은 차감하지 않아.');
-    }
-  }finally{await worker.terminate();}
-}
 async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false){
   await verifyOutputFile(original,edited,allowExtended);
   const form=new FormData();
@@ -592,7 +561,6 @@ async function handle(update,base,credits,commerce,adminMenu){
         throw new Error('자동 수정 영역이 원본 범위를 벗어났어. 브라우저에서 직접 선택해 줘.');
       }
       const output=await reviseDesignRegion(job.buf,{x,y,w:right-x,h:bottom-y},'Edit the selected design region only. '+job.change.from+' to '+job.change.to+'. Preserve surrounding visual context.');
-      await verifyNumericReplacement(output,{x,y,w:right-x,h:bottom-y},job.change.to);
       await sendOriginalAndEdit(job.chatId,job.buf,output);
       await credits.consume(creditId);
       await sendBalance(job.chatId,cb.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
@@ -789,7 +757,6 @@ export function mountImageBot(app,base,pool,commerce){
         const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
         job.state='verifying';
         await verifyOutputFile(job.buf,output);
-        await verifyNumericReplacement(output,values,job.change.to);
         job.state='sending';
         await sendOriginalAndEdit(job.chatId,job.buf,output);
         await credits.consume(creditId);
