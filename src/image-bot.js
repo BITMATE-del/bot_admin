@@ -482,7 +482,7 @@ async function handle(update,base,credits,commerce,adminMenu){
     ];
     if(await adminMenu.isAdmin(msg.from.id))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
     await tg('sendMessage',{chat_id:chatId,
-      text:'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n그룹에 입장하면 UID당 1회 무료 편집 이용권을 받을 수 있어.\n결과 전송 성공 시에만 이용권을 차감해.',
+      text:"📸 포토샵봇 | 이용 안내\n\n빠르고 간편한 이미지 편집 서비스\n\n포토샵봇은 업무 편의성을 높이기 위해 개발된 이미지 편집 봇입니다.\n\n이미지 내 수익금, 잔액, 수치, 날짜 등 간단한 문구를 빠르게 수정할 수 있습니다.\n\n📌 이용 전 확인사항\n\n• 간단한 숫자 및 문구 변경에 최적화되어 있으며, 복잡하거나 정밀한 편집은 지원되지 않을 수 있습니다.\n\n• AI 자동 편집 특성상 원본 이미지의 글꼴, 배치, 색상 등이 완벽하게 재현되지 않을 수 있습니다.\n\n• 정상적으로 완료된 편집은 단순 변심이나 추가 수정 요청에 따른 무상 재작업이 어렵습니다.\n\n• 요청한 내용과 다르게 편집된 경우에는 확인 후 재작업 가능 여부를 안내해 드립니다.\n\n🛠 A/S 및 고객지원\n\n편집 결과에 문제가 있거나 A/S가 필요한 경우 고객센터로 문의해 주세요.\n\n이용권 사용 전 안내사항을 반드시 확인해 주시기 바랍니다.",
       reply_markup:{inline_keyboard:buttons}
     });
     await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
