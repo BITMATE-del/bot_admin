@@ -109,7 +109,7 @@ export function mountPhotoAdmin(app,pool){
   const methods=[];
   if(/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(shop.usdt_trc20_address||''))methods.push('USDT');
   if(/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(shop.trx_address||'')&&Number(shop.trx_per_usdt)>0)methods.push('TRX');
-  return {enabled:Boolean(shop.enabled&&methods.length&&process.env.TRONGRID_API_KEY?.trim()),methods,packages:packs.rows};
+  return {enabled:Boolean(shop.enabled&&methods.length&&watcher.isReady()),methods,packages:packs.rows};
  }
  async function order(uid,packageId,asset='USDT'){
   const c=await pool.connect();
@@ -119,6 +119,7 @@ export function mountPhotoAdmin(app,pool){
    if(account?.is_blocked)throw Error('이용이 제한된 계정은 구매 신청을 할 수 없습니다.');
    const shop=(await c.query('SELECT enabled,usdt_trc20_address,trx_address,trx_per_usdt,payment_instructions FROM image_shop_settings WHERE singleton=TRUE')).rows[0];
    if(!shop?.enabled)throw Error('현재 이용권 판매가 준비 중입니다.');
+   if(!watcher.isReady())throw Error('TronGrid API 연결 확인 중입니다. 잠시 후 다시 시도해 주세요.');
    if(!process.env.TRONGRID_API_KEY?.trim())throw Error('TronGrid 자동충전이 아직 설정되지 않았습니다.');
    const pack=(await c.query('SELECT * FROM image_shop_packages WHERE id=$1 AND active=TRUE AND price_usdt>0',[packageId])).rows[0];
    if(!pack)throw Error('해당 상품은 판매 중이 아닙니다.');
