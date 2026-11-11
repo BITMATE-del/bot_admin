@@ -323,6 +323,21 @@ async function showPhotoShop(chatId,commerce){
 async function handle(update,base,credits,commerce,adminMenu){
   if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
+  if(['ui:shop','ui:balance','ui:orders'].includes(cb?.data)){
+    if(cb.message?.chat?.type!=='private')return;
+    await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
+    const chatId=cb.message.chat.id,uid=cb.from.id;
+    if(cb.data==='ui:shop')await showPhotoShop(chatId,commerce);
+    else if(cb.data==='ui:balance')await sendBalance(chatId,uid,credits,'내 편집 이용권');
+    else {
+      const items=await commerce.ordersFor(String(uid));
+      const states={pending:'입금 확인 대기',approved:'승인 완료',rejected:'거절'};
+      await send(chatId,items.length
+        ?'🧾 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+' ('+x.credits+'회 / '+Number(x.price_krw).toLocaleString('ko-KR')+'원) · '+(states[x.state]||x.state)).join('\n')
+        :'아직 구매 신청 내역이 없어.');
+    }
+    return;
+  }
   if(cb?.data?.startsWith('shop:')){
     const chatId=cb.message?.chat?.id;
     if(!chatId||cb.message.chat.type!=='private')return;
@@ -403,7 +418,15 @@ async function handle(update,base,credits,commerce,adminMenu){
     return;
   }
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 내 이용권 확인\n/이용권구매 - 이용권 구매하기\n/구매내역 - 신청 처리 상태\n/내UID - 고유 UID 확인');
+    const buttons=[
+      [{text:'🎫 이용권 구매하기',callback_data:'ui:shop'}],
+      [{text:'📊 내 이용권',callback_data:'ui:balance'},{text:'🧾 구매 내역',callback_data:'ui:orders'}]
+    ];
+    if(await adminMenu.isAdmin(msg.from.id))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
+    await tg('sendMessage',{chat_id:chatId,
+      text:'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n신규 회원은 무료 체험권 1회가 지급돼.\n결과 전송 성공 시에만 이용권을 차감해.',
+      reply_markup:{inline_keyboard:buttons}
+    });
     await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
     return;
   }
