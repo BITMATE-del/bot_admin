@@ -12,6 +12,8 @@ const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
 const successfulEditDurations=[];
+const FREE_PASS_GROUP='@angggggaggg';
+const FREE_PASS_LINK='https://t.me/angggggaggg';
 const purchasePending=new Map();
 function estimateRemaining(state,elapsed){
   if(state==='done')return {min:0,max:0,basis:'complete'};
@@ -298,7 +300,7 @@ async function sendManualLink(chatId,jobId,base){
 
 async function sendBalance(chatId,uid,credits,heading='사용 가능 횟수'){
   const b=await credits.status(uid);
-  await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 체험권: '+b.trial_left+'회\n구매 이용권: '+(b.point_left+b.paid_left)+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 결과 전송 성공 시에만 이용권 1회 차감');
+  await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 이용권: '+b.trial_left+'회\n구매 이용권: '+(b.point_left+b.paid_left)+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 결과 전송 성공 시에만 이용권 1회 차감');
   return b;
 }
 async function obtainCredit(chatId,uid,credits,source,summary=''){
@@ -320,9 +322,63 @@ async function showPhotoShop(chatId,commerce){
   reply_markup:{inline_keyboard:shop.packages.map(p=>[{text:p.name+' · '+p.credits+'회 / '+Number(p.price_krw).toLocaleString('ko-KR')+'원',callback_data:'shop:'+p.id}])}
  });
 }
+async function showFreePass(chatId,uid,credits){
+ if(await credits.freePassClaimed(uid)){
+  await send(chatId,'첫 무료 이용권은 계정당 1회만 받을 수 있어. 이미 지급받은 UID야.\n/잔여횟수 에서 현재 이용권을 확인해 줘.');
+  return;
+ }
+ await tg('sendMessage',{chat_id:chatId,
+  text:'🎁 첫 무료 이용권 받기\n\n아래 텔레그램 그룹에 입장하면 무료 편집 이용권 1회를 받을 수 있어.\n\n✅ UID당 평생 1회만 지급\n✅ 입장 후 [입장 확인 · 이용권 받기]를 눌러 줘.\n✅ 가입 여부가 확인된 경우에만 지급돼.',
+  reply_markup:{inline_keyboard:[
+   [{text:'📢 그룹 입장하기',url:FREE_PASS_LINK}],
+   [{text:'✅ 입장 확인 · 이용권 받기',callback_data:'ui:verifyfree'}]
+  ]}
+ });
+}
+async function verifyFreePass(chatId,uid,credits){
+ if(await credits.freePassClaimed(uid)){
+  await send(chatId,'이미 첫 무료 이용권을 지급받은 UID야. 계정당 1회만 받을 수 있어.');return;
+ }
+ let membership;
+ try{
+  membership=await tg('getChatMember',{chat_id:FREE_PASS_GROUP,user_id:Number(uid)});
+ }catch(e){
+  console.error('free pass membership check unavailable:',e.message);
+  await send(chatId,'그룹 가입 상태를 조회하지 못했어. 그룹에 포토샵봇이 관리자로 등록되어 있는지 확인해 줘.\n확인 전에는 이용권을 지급하지 않아.');
+  return;
+ }
+ const status=membership?.status;
+ const joined=status==='creator'||status==='administrator'||status==='member'||
+  (status==='restricted'&&membership.is_member===true);
+ if(!joined){
+  await tg('sendMessage',{chat_id:chatId,
+   text:'아직 그룹 입장이 확인되지 않았어. 아래 링크로 입장한 뒤 다시 확인해 줘.',
+   reply_markup:{inline_keyboard:[
+    [{text:'📢 그룹 입장하기',url:FREE_PASS_LINK}],
+    [{text:'✅ 입장 다시 확인',callback_data:'ui:verifyfree'}]
+   ]}
+  });
+  return;
+ }
+ const result=await credits.grantFreePassOnce(uid);
+ if(!result.ok){
+  await send(chatId,result.reason==='blocked'?'이용이 제한된 계정에는 이용권을 지급할 수 없어.':'이미 첫 무료 이용권을 지급받은 UID야. 계정당 1회만 받을 수 있어.');
+  return;
+ }
+ await send(chatId,'🎉 그룹 가입 확인 완료!\n첫 무료 편집 이용권 1회가 지급됐어.\n이용권은 UID당 평생 한 번만 지급돼.');
+ await sendBalance(chatId,uid,credits,'무료 이용권 지급 완료');
+}
 async function handle(update,base,credits,commerce,adminMenu){
   if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
+  if(['ui:free','ui:verifyfree'].includes(cb?.data)){
+    if(cb.message?.chat?.type!=='private')return;
+    await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
+    await credits.touch(cb.from.id,cb.from);
+    if(cb.data==='ui:free')await showFreePass(cb.message.chat.id,cb.from.id,credits);
+    else await verifyFreePass(cb.message.chat.id,cb.from.id,credits);
+    return;
+  }
   if(['ui:shop','ui:balance','ui:orders'].includes(cb?.data)){
     if(cb.message?.chat?.type!=='private')return;
     await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
@@ -397,6 +453,7 @@ async function handle(update,base,credits,commerce,adminMenu){
   await credits.touch(msg.from.id,msg.from);
   const userKey=String(msg.from.id);
   if(msg.text?.trim()==='/취소'){purchasePending.delete(userKey);await send(chatId,'진행 중이던 구매 신청을 취소했어.');return;}
+  if(['/무료이용권','/무료체험','/free'].includes(msg.text?.trim())){await showFreePass(chatId,msg.from.id,credits);return;}
   if(['/이용권구매','/구매','/shop'].includes(msg.text?.trim())){await showPhotoShop(chatId,commerce);return;}
   if(['/구매내역','/orders'].includes(msg.text?.trim())){
     const items=await commerce.ordersFor(userKey);
@@ -419,12 +476,13 @@ async function handle(update,base,credits,commerce,adminMenu){
   }
   if(msg.text==='/start'||msg.text==='/help'){
     const buttons=[
+      [{text:'🎁 첫 무료 이용권 받기',callback_data:'ui:free'}],
       [{text:'🎫 이용권 구매하기',callback_data:'ui:shop'}],
       [{text:'📊 내 이용권',callback_data:'ui:balance'},{text:'🧾 구매 내역',callback_data:'ui:orders'}]
     ];
     if(await adminMenu.isAdmin(msg.from.id))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
     await tg('sendMessage',{chat_id:chatId,
-      text:'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n신규 회원은 무료 체험권 1회가 지급돼.\n결과 전송 성공 시에만 이용권을 차감해.',
+      text:'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n그룹에 입장하면 UID당 1회 무료 편집 이용권을 받을 수 있어.\n결과 전송 성공 시에만 이용권을 차감해.',
       reply_markup:{inline_keyboard:buttons}
     });
     await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
@@ -448,7 +506,7 @@ async function handle(update,base,credits,commerce,adminMenu){
     if(balance.is_blocked){sessions.delete(chatId);await send(chatId,'관리자가 사용을 제한한 계정이야.');return;}
     await send(chatId,balance.remaining>0
       ?'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\n🎫 잔여 편집 횟수: '+balance.remaining+'회'
-      :'이미지를 받았지만 이용 가능한 편집 횟수가 없어. /이용권구매 로 구매할 수 있어.');
+      :'이용 가능한 편집 이용권이 없어. /start에서 첫 무료 이용권 받기를 누르거나 이용권을 구매해 줘.');
     return;
   }
   if(!msg.text)return;
