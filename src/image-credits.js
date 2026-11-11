@@ -1,8 +1,8 @@
 // Durable UID-scoped edit credits and one-time trial migration.
 import crypto from 'node:crypto';
 
-const trialRaw=Number(process.env.IMAGE_TRIAL_CREDITS??1);
-export const trialCredits=Number.isSafeInteger(trialRaw)&&trialRaw>=0&&trialRaw<=1000?trialRaw:1;
+// Free trial is granted only after verified Telegram group membership.
+export const trialCredits=0;
 
 export function createImageCredits(pool){
  async function init(){
@@ -25,6 +25,10 @@ export function createImageCredits(pool){
    CREATE INDEX IF NOT EXISTS image_credit_usage_uid_idx ON image_credit_usage(uid,state,expires_at);
    ALTER TABLE image_credit_usage DROP CONSTRAINT IF EXISTS image_credit_usage_credit_type_check;
    ALTER TABLE image_credit_usage ADD CONSTRAINT image_credit_usage_credit_type_check CHECK(credit_type IN ('trial','paid','point'));
+   CREATE TABLE IF NOT EXISTS image_free_pass_claims(
+    uid BIGINT PRIMARY KEY REFERENCES image_credit_accounts(uid),
+    source TEXT NOT NULL DEFAULT 'group_join',
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
    CREATE TABLE IF NOT EXISTS image_system_migrations(id TEXT PRIMARY KEY,applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());`);
   // Older users were granted three trial edits. Reduce these grants to one
   // exactly once, preserving used historical entries and explicit admin edits.
@@ -33,6 +37,14 @@ export function createImageCredits(pool){
     ON CONFLICT DO NOTHING RETURNING id
    ) UPDATE image_credit_accounts SET trial_total=1,updated_at=NOW()
    WHERE trial_total=3 AND EXISTS(SELECT 1 FROM once)`);
+  // Grandfather previously awarded free passes: no existing UID may claim
+  // another first free pass just by joining the group.
+  await pool.query(`INSERT INTO image_free_pass_claims(uid,source)
+   SELECT a.uid,'previous_free_trial' FROM image_credit_accounts a
+   WHERE a.trial_total>0 OR EXISTS(
+    SELECT 1 FROM image_credit_usage u WHERE u.uid=a.uid AND u.credit_type='trial')
+   ON CONFLICT(uid) DO NOTHING`);
+
  }
  const uidOf=value=>{
   const v=String(value??'');if(!/^\d{1,19}$/.test(v))throw Error('올바른 텔레그램 UID가 아니야.');return v;
@@ -69,6 +81,32 @@ export function createImageCredits(pool){
     uid,trialCredits,String(from.username||'').slice(0,100),
     [from.first_name,from.last_name].filter(Boolean).join(' ').slice(0,140)]);
  }
+ async function freePassClaimed(value){
+  const uid=uidOf(value);
+  return Boolean((await pool.query('SELECT 1 FROM image_free_pass_claims WHERE uid=$1',[uid])).rowCount);
+ }
+ async function grantFreePassOnce(value){
+  const uid=uidOf(value),c=await pool.connect();
+  try{
+   await c.query('BEGIN');
+   await ensure(c,uid);
+   const account=(await c.query('SELECT is_blocked,trial_total FROM image_credit_accounts WHERE uid=$1 FOR UPDATE',[uid])).rows[0];
+   if(account.is_blocked){await c.query('COMMIT');return {ok:false,reason:'blocked'};}
+   // Also protect pre-migration trial grants even if the backfill was missed.
+   const before=(await c.query('SELECT 1 FROM image_free_pass_claims WHERE uid=$1',[uid])).rowCount;
+   if(before || account.trial_total>0 ||
+     (await c.query("SELECT 1 FROM image_credit_usage WHERE uid=$1 AND credit_type='trial' LIMIT 1",[uid])).rowCount){
+    await c.query('COMMIT');return {ok:false,reason:'claimed'};
+   }
+   await c.query("INSERT INTO image_free_pass_claims(uid,source) VALUES($1,'group_join')",[uid]);
+   await c.query('UPDATE image_credit_accounts SET trial_total=trial_total+1,updated_at=NOW() WHERE uid=$1',[uid]);
+   await c.query('COMMIT');return {ok:true};
+  }catch(e){
+   await c.query('ROLLBACK').catch(()=>{});
+   if(e.code==='23505')return {ok:false,reason:'claimed'};
+   throw e;
+  }finally{c.release();}
+ }
  async function reserve(value,source='edit',summary=''){
   const uid=uidOf(value),c=await pool.connect();
   try{
@@ -90,5 +128,5 @@ export function createImageCredits(pool){
   await pool.query(`UPDATE image_credit_usage SET state=$2,finished_at=NOW()
    WHERE id=$1 AND state='reserved'`,[id,state]);
  }
- return {init,status,touch,reserve,consume:id=>finish(id,'used'),release:id=>finish(id,'released'),uidOf};
+ return {init,status,touch,freePassClaimed,grantFreePassOnce,reserve,consume:id=>finish(id,'used'),release:id=>finish(id,'released'),uidOf};
 }
