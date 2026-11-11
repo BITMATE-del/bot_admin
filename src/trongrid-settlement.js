@@ -56,7 +56,7 @@ function addressHex(addr){
  return bytes.subarray(0,21).toString('hex');
 }
 export function createTronGridSettlement(pool,notify){
- let running=false;
+ let running=false,healthy=false;
  async function init(){
   await pool.query(`CREATE TABLE IF NOT EXISTS image_payment_transactions(
    txid TEXT PRIMARY KEY,order_id BIGINT NOT NULL UNIQUE REFERENCES image_shop_orders(id),
@@ -69,6 +69,16 @@ export function createTronGridSettlement(pool,notify){
     ON image_shop_orders(payment_asset,payment_amount,payment_address)
     WHERE state='pending' AND auto_match=TRUE;`);
   await pool.query('UPDATE image_shop_settings SET usdt_trc20_address=$1,trx_address=$1 WHERE singleton=TRUE',[WALLET]);
+ }
+ async function probe(){
+  if(!key())return false;
+  try{
+   const result=await fetchPage('/v1/accounts/'+WALLET+'/transactions/trc20',{
+    only_confirmed:'true',contract_address:USDT_CONTRACT,limit:'1'});
+   healthy=Array.isArray(result.data);
+   if(healthy)console.log('TronGrid API authenticated and responding for monitored wallet');
+   return healthy;
+  }catch(e){healthy=false;console.error('TronGrid API health check failed:',e.message);return false;}
  }
  async function check(){
   if(!key()||running)return;
@@ -107,15 +117,18 @@ export function createTronGridSettlement(pool,notify){
       ['trongrid_auto_approved',row.uid,JSON.stringify({order_id:o.id,txid:tx.txid,asset:o.payment_asset,amount:o.payment_amount,credits:row.credits})]);
      await client.query('COMMIT');approved=true;
     }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}
-    if(approved)await notify(o.uid,'✅ 입금 자동 확인 완료\\n이용권 '+o.credits+'매가 지급됐어.\\n주문 #'+o.id+'\\n/잔여횟수 에서 확인해 줘.').catch(console.error);
+    if(approved)await notify(o.uid,'✅ 입금 자동 확인 완료\n이용권 '+o.credits+'매가 지급됐어.\n주문 #'+o.id+'\n/잔여횟수 에서 확인해 줘.').catch(console.error);
    }
   }catch(e){console.error('TronGrid deposit scan:',e.message)}finally{running=false;}
  }
  function start(){
   if(!key()){console.log('TronGrid automatic credit disabled until TRONGRID_API_KEY is set');return;}
   console.log('TronGrid deposit watcher active for '+WALLET);
-  check().catch(console.error);
-  setInterval(()=>check().catch(console.error),Math.max(30000,waitMs)).unref();
+  probe().then(ok=>{if(ok)check().catch(console.error)}).catch(console.error);
+  setInterval(async()=>{
+   if(!healthy){if(!await probe())return;}
+   await check();
+  },Math.max(30000,waitMs)).unref();
  }
- return {init,start,check};
+ return {init,start,check,isReady:()=>healthy};
 }
