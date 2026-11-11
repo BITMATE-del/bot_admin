@@ -183,7 +183,7 @@ function showJobStatus(data){
 }
 // Transient HTTP and browser connection errors do not mean an accepted edit failed.
 const inProgressStates=new Set(['reserving','preparing','editing','verifying','sending']);
-const transientStatusError=e=>/fetch|network|Load failed|상태 조회 실패 \\(5\\d\\d\\)|Failed to fetch|connection|timeout/i.test(String(e?.message||''));
+const transientStatusError=e=>/fetch|network|Load failed|상태 조회 실패.*5[0-9][0-9]|Failed to fetch|connection|timeout/i.test(String(e?.message||''));
 async function statusPoll({uncertainSubmission=false}={}){
  let connectionErrors=0,notFound=0;
  // Keep the existing bounded poll time and 30-minute server job TTL.
