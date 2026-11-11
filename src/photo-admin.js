@@ -1,10 +1,20 @@
 import {createImageCredits,trialCredits} from './image-credits.js';
 import {createPhotoAdminOps} from './photo-admin-ops.js';
+import {createTronGridSettlement} from './trongrid-settlement.js';
+import crypto from 'node:crypto';
 const safeUid=value=>/^\d{1,19}$/.test(String(value||''))?String(value):null;
 
 export function mountPhotoAdmin(app,pool){
  const credits=createImageCredits(pool);
  const telegramAdmin=createPhotoAdminOps(pool);
+ const watcher=createTronGridSettlement(pool,async(uid,text)=>{
+  const token=process.env.IMAGE_BOT_TOKEN;
+  if(!token)return;
+  const resp=await fetch('https://api.telegram.org/bot'+token+'/sendMessage',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({chat_id:uid,text}),signal:AbortSignal.timeout(12000)});
+  if(!resp.ok)throw Error('Telegram notify HTTP '+resp.status);
+ });
  const ensure=async(uid)=>pool.query('INSERT INTO image_credit_accounts(uid,trial_total) VALUES($1,$2) ON CONFLICT(uid) DO NOTHING',[uid,trialCredits]);
  async function init(){
   await credits.init();
@@ -52,6 +62,7 @@ export function mountPhotoAdmin(app,pool){
              ('이용권 50매',50,0,120,TRUE,2),
              ('이용권 100매',100,0,220,TRUE,3)`);
   }
+  await watcher.init();
   const existing=await pool.query('SELECT COUNT(*)::int AS n FROM image_shop_packages');
   if(!existing.rows[0].n)await pool.query(`INSERT INTO image_shop_packages(name,credits,price_krw,active,sort_order)
    VALUES ('체험 연장 5회',5,0,FALSE,1),('기본 10회',10,0,FALSE,2),('집중 30회',30,0,FALSE,3)`);
@@ -69,7 +80,7 @@ export function mountPhotoAdmin(app,pool){
   const methods=[];
   if(/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(shop.usdt_trc20_address||''))methods.push('USDT');
   if(/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(shop.trx_address||'')&&Number(shop.trx_per_usdt)>0)methods.push('TRX');
-  return {enabled:Boolean(shop.enabled&&methods.length),methods,packages:packs.rows};
+  return {enabled:Boolean(shop.enabled&&methods.length&&process.env.TRONGRID_API_KEY?.trim()),methods,packages:packs.rows};
  }
  async function order(uid,packageId,asset='USDT'){
   const c=await pool.connect();
@@ -86,14 +97,31 @@ export function mountPhotoAdmin(app,pool){
    const rate=Number(shop.trx_per_usdt);
    if(!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address||''))throw Error('해당 결제 통화의 지갑 주소가 등록되지 않았습니다.');
    if(asset==='TRX'&&(!Number.isFinite(rate)||rate<=0))throw Error('관리자가 TRX 환산율을 설정하지 않았습니다.');
+   if(!process.env.TRONGRID_API_KEY?.trim())throw Error('TronGrid API 키 등록 전에는 자동충전을 사용할 수 없습니다.');
+   await c.query(`UPDATE image_shop_orders SET state='rejected',decided_at=NOW(),
+     decision_note='Payment window expired' WHERE uid=$1 AND state='pending' AND auto_match=TRUE AND expires_at<NOW()`,[uid]);
    const existing=(await c.query("SELECT id FROM image_shop_orders WHERE uid=$1 AND state='pending' ORDER BY id DESC LIMIT 1",[uid])).rows[0];
    if(existing)throw Error('이미 입금 확인 대기 중인 신청 #'+existing.id+'이 있습니다.');
    const usdt=Number(pack.price_usdt);
-   const amount=asset==='USDT'?usdt:Math.ceil(usdt*rate*1e6)/1e6;
-   const result=await c.query(`INSERT INTO image_shop_orders(
-     uid,package_id,package_name,credits,price_krw,price_usdt,payment_asset,payment_amount,payment_address)
-     VALUES($1,$2,$3,$4,0,$5,$6,$7,$8) RETURNING id`,[
-      uid,pack.id,pack.name,pack.credits,usdt,asset,amount,address]);
+   // A shared receiving wallet needs a unique exact deposit amount for each
+   // pending order; never credit by nominal package price alone.
+   const micros=BigInt(Math.ceil(usdt*(asset==='USDT'?1:rate)*1000000));
+   let result;
+   for(let attempt=0;attempt<60;attempt++){
+    const suffix=BigInt(crypto.randomInt(1,999999));
+    const exact=micros+suffix;
+    const amount=(exact/1000000n).toString()+'.'+(exact%1000000n).toString().padStart(6,'0');
+    const taken=await c.query(`SELECT 1 FROM image_shop_orders
+      WHERE state='pending' AND auto_match=TRUE AND payment_asset=$1 AND
+      payment_address=$2 AND payment_amount=$3 LIMIT 1`,[asset,address,amount]);
+    if(taken.rowCount)continue;
+    result=await c.query(`INSERT INTO image_shop_orders(
+      uid,package_id,package_name,credits,price_krw,price_usdt,payment_asset,payment_amount,
+      payment_address,auto_match,expires_at) VALUES($1,$2,$3,$4,0,$5,$6,$7,$8,TRUE,NOW()+INTERVAL '24 hours') RETURNING id`,
+      [uid,pack.id,pack.name,pack.credits,usdt,asset,amount,address]);
+    break;
+   }
+   if(!result)throw Error('고유 입금 수량 발급에 실패했습니다. 다시 시도해 주세요.');
    await c.query('COMMIT');
    return {id:result.rows[0].id,credits:pack.credits,name:pack.name,price_usdt:usdt,
      payment_asset:asset,payment_amount:amount,payment_address:address,
@@ -106,5 +134,5 @@ export function mountPhotoAdmin(app,pool){
    FROM image_shop_orders WHERE uid=$1 ORDER BY id DESC LIMIT 10`,[id]);
   return r.rows;
  }
- return {init,storefront,order,ordersFor,credits,telegramAdmin};
+ return {init,storefront,order,ordersFor,credits,telegramAdmin,startWatcher:watcher.start};
 }
