@@ -63,6 +63,35 @@ export function mountPhotoAdmin(app,pool){
              ('이용권 100매',100,0,220,TRUE,3)`);
   }
   await watcher.init();
+  // Operator-approved, one-time activation. Never override a subsequent
+  // administrator decision to pause sales on a restart or redeploy.
+  if(process.env.TRONGRID_API_KEY?.trim()){
+   const client=await pool.connect();
+   try{
+    await client.query('BEGIN');
+    const settings=(await client.query('SELECT * FROM image_shop_settings WHERE singleton=TRUE FOR UPDATE')).rows[0];
+    const validWallet=String(process.env.TRONGRID_WALLET_ADDRESS||'TDTw6GaL2GwjPY8JgY8fsk6hip5UAwcWDX');
+    const eligible=Boolean(settings&&
+      settings.usdt_trc20_address===validWallet&&
+      /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(validWallet));
+    if(eligible){
+     const packages=(await client.query(`SELECT COUNT(*)::int AS count FROM image_shop_packages
+       WHERE active=TRUE AND credits IN (10,50,100) AND price_usdt>0`)).rows[0].count;
+     if(packages===3){
+      const once=await client.query(`INSERT INTO image_system_migrations(id)
+        VALUES('enable_trongrid_shop_once_20261111') ON CONFLICT DO NOTHING RETURNING id`);
+      if(once.rowCount){
+       await client.query('UPDATE image_shop_settings SET enabled=TRUE,updated_at=NOW() WHERE singleton=TRUE');
+       await client.query('INSERT INTO image_admin_audit(action,details) VALUES($1,$2)',[
+        'shop_activated_by_owner_request',JSON.stringify({payment:'TronGrid',method:'USDT-TRC20',packages:[10,50,100]})]);
+       console.log('Photo bot coupon shop activated with TronGrid');
+      }
+     }
+    }
+    await client.query('COMMIT');
+   }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}
+   finally{client.release();}
+  }
   const existing=await pool.query('SELECT COUNT(*)::int AS n FROM image_shop_packages');
   if(!existing.rows[0].n)await pool.query(`INSERT INTO image_shop_packages(name,credits,price_krw,active,sort_order)
    VALUES ('체험 연장 5회',5,0,FALSE,1),('기본 10회',10,0,FALSE,2),('집중 30회',30,0,FALSE,3)`);
