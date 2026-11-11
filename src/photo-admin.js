@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createImageCredits,trialCredits} from './image-credits.js';
+import {createPhotoAdminOps} from './photo-admin-ops.js';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const pw=()=>String(process.env.IMAGE_ADMIN_PASSWORD||process.env.ADMIN_SECOND_PASSWORD||'');
@@ -17,9 +18,11 @@ const recentLogins=new Map();
 
 export function mountPhotoAdmin(app,pool){
  const credits=createImageCredits(pool);
+ const telegramAdmin=createPhotoAdminOps(pool);
  const ensure=async(uid)=>pool.query('INSERT INTO image_credit_accounts(uid,trial_total) VALUES($1,$2) ON CONFLICT(uid) DO NOTHING',[uid,trialCredits]);
  async function init(){
   await credits.init();
+  await telegramAdmin.init();
   await pool.query(`CREATE TABLE IF NOT EXISTS image_shop_settings(
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton),
     enabled BOOLEAN NOT NULL DEFAULT FALSE,
@@ -46,6 +49,11 @@ export function mountPhotoAdmin(app,pool){
   if(!existing.rows[0].n)await pool.query(`INSERT INTO image_shop_packages(name,credits,price_krw,active,sort_order)
    VALUES ('체험 연장 5회',5,0,FALSE,1),('기본 10회',10,0,FALSE,2),('집중 30회',30,0,FALSE,3)`);
  }
+ // Former password-only web administration is retired. UID-verified Telegram
+ // administration is the sole supported management surface.
+ app.use(['/photo-admin','/api/photo-admin'],(_req,res)=>{
+  res.status(410).set('Cache-Control','no-store').json({error:'관리자 기능은 포토샵봇의 /관리자 메뉴로 이동했습니다.'});
+ });
  const error=(res,e)=>{console.error('photo admin:',e.message);res.status(400).json({error:e.message||'처리 실패'})};
  const requireAdmin=(req,res,next)=>{
   const [expires,nonce,signature]=cookie(req).split('.');
@@ -181,7 +189,7 @@ export function mountPhotoAdmin(app,pool){
    if(order.state!=='pending')throw Error('이미 처리된 주문입니다.');
    if(decision==='approved'){
     await client.query('SELECT uid FROM image_credit_accounts WHERE uid=$1 FOR UPDATE',[order.uid]);
-    await client.query('UPDATE image_credit_accounts SET point_total=point_total+$2,updated_at=NOW() WHERE uid=$1',[order.uid,order.credits]);
+    await client.query('UPDATE image_credit_accounts SET paid_total=paid_total+$2,updated_at=NOW() WHERE uid=$1',[order.uid,order.credits]);
    }
    await client.query('UPDATE image_shop_orders SET state=$2,decided_at=NOW(),decision_note=$3 WHERE id=$1',[id,decision,String(req.body?.note||'').slice(0,200)]);
    await client.query('INSERT INTO image_admin_audit(action,uid,details) VALUES($1,$2,$3)',[
@@ -239,5 +247,5 @@ export function mountPhotoAdmin(app,pool){
    FROM image_shop_orders WHERE uid=$1 ORDER BY id DESC LIMIT 10`,[id]);
   return r.rows;
  }
- return {init,storefront,order,ordersFor,credits};
+ return {init,storefront,order,ordersFor,credits,telegramAdmin};
 }
