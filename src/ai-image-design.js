@@ -170,9 +170,32 @@ function assessLabelConsistency(original,edited,w,h){
     .map(axis=>afterStroke[axis]/beforeStroke[axis]);
   if(strokeRatios.some(ratio=>ratio<.68||ratio>1.45))
     return '수정본 글꼴의 획 두께가 원본과 크게 달라.';
-  if(Math.abs(a.brightness-b.brightness)>30)return '수정본 글자 색상 명도가 원본과 크게 달라.';
-  const colorShift=Math.max(...a.color.map((v,i)=>Math.abs(v-b.color[i])));
-  if(colorShift>40)return '수정본의 글자 색상이 원본과 크게 달라.';
+  // Antialiasing and changed digit shapes alter the ratio of edge pixels to
+  // fully painted glyph pixels. Comparing the *average* foreground brightness
+  // spuriously rejects correct colors. Compare robust, high-contrast glyph
+  // cores instead; preserve rejection for genuinely recolored labels.
+  const coreInk=bytes=>{
+    const cores=[];
+    for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+      const i=(y*w+x)*4;
+      const rgb=[bytes[i],bytes[i+1],bytes[i+2]];
+      if(colorDistance(...rgb)>=65)cores.push(rgb);
+    }
+    if(cores.length<Math.max(5,Math.floor(n*.008)))return null;
+    const medianChannel=channel=>{
+      const v=cores.map(p=>p[channel]).sort((a,b)=>a-b);
+      return v[Math.floor(v.length*.5)];
+    };
+    return [medianChannel(0),medianChannel(1),medianChannel(2)];
+  };
+  const sourceCore=coreInk(original),resultCore=coreInk(edited);
+  if(sourceCore&&resultCore){
+    const brightness=rgb=>(rgb[0]*.299+rgb[1]*.587+rgb[2]*.114);
+    if(Math.abs(brightness(sourceCore)-brightness(resultCore))>36)
+      return '수정본 글자 색상 명도가 원본과 크게 달라.';
+    const colorShift=Math.max(...sourceCore.map((v,i)=>Math.abs(v-resultCore[i])));
+    if(colorShift>48)return '수정본의 글자 색상이 원본과 크게 달라.';
+  }
   // Rasterized text replacement can alter visible glyph bounds even when
   // font size is matched (e.g. 1->7, 100000->1000000, Korean glyph changes).
   // A 20% pixel-height limit rejected otherwise usable edits. Keep a broad
