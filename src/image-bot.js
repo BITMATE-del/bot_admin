@@ -451,7 +451,7 @@ async function handle(update,base,credits,commerce,adminMenu){
         '\n기준 가격: '+Number(order.price_usdt).toLocaleString('en-US')+' USDT'+
         '\n결제 통화: '+(asset==='USDT'?'USDT (TRC20)':'TRON (TRX)')+
         '\n입금 수량: '+Number(order.payment_amount).toLocaleString('en-US',{maximumFractionDigits:6})+' '+asset+
-        '\n네트워크: TRON (TRC20)'+
+        '\n네트워크: '+(asset==='USDT'?'TRON / TRC20':'TRON / TRX')+
         '\n입금 주소:\n'+order.payment_address+
         (order.instructions?'\n\n'+order.instructions:'')+
         '\n\n입금 후 관리자에게 확인을 요청해 줘. 실제 입금 확인 후 이용권이 지급돼.\n※ 신청만으로 결제 완료 또는 지급 처리되지 않아.');
