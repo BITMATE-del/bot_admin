@@ -117,16 +117,20 @@ function assessLabelConsistency(original,edited,w,h){
   if(borderVar/border.length>13)return null;
   const sample=(bytes)=>{
     let count=0,sumX=0,sumY=0,sumBrightness=0;
-    let sumR=0,sumG=0,sumB=0,minY=h,maxY=-1;
+    let sumR=0,sumG=0,sumB=0,minX=w,maxX=-1,minY=h,maxY=-1;
     for(let y=0;y<h;y++)for(let x=0;x<w;x++){
       const i=(y*w+x)*4;
       const r=bytes[i],g=bytes[i+1],b=bytes[i+2];
       if(colorDistance(r,g,b)<32)continue;
       count++;sumX+=x;sumY+=y;sumBrightness+=(r+g+b)/3;
-      sumR+=r;sumG+=g;sumB+=b;minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+      sumR+=r;sumG+=g;sumB+=b;minX=Math.min(minX,x);maxX=Math.max(maxX,x);
+      minY=Math.min(minY,y);maxY=Math.max(maxY,y);
     }
     return count?{count,x:sumX/count,y:sumY/count,brightness:sumBrightness/count,
-      color:[sumR/count,sumG/count,sumB/count],height:maxY-minY+1}:null;
+      color:[sumR/count,sumG/count,sumB/count],
+      left:minX,right:maxX,top:minY,bottom:maxY,
+      width:maxX-minX+1,height:maxY-minY+1,
+      centerX:(minX+maxX)/2,centerY:(minY+maxY)/2}:null;
   };
   // Measure stroke thickness independently of the number of characters.
   // A regenerated bold/sans-serif font can pass overall color and height
@@ -196,17 +200,30 @@ function assessLabelConsistency(original,edited,w,h){
     const colorShift=Math.max(...sourceCore.map((v,i)=>Math.abs(v-resultCore[i])));
     if(colorShift>48)return '수정본의 글자 색상이 원본과 크게 달라.';
   }
-  // Rasterized text replacement can alter visible glyph bounds even when
-  // font size is matched (e.g. 1->7, 100000->1000000, Korean glyph changes).
-  // A 20% pixel-height limit rejected otherwise usable edits. Keep a broad
-  // guardrail against gross enlargement, but rely on border clipping, color,
-  // foreground density and the final changed-pixel check for actual defects.
+  // A selected text line must retain its visible height and geometric
+  // center even when replacement digits increase its total width. These are
+  // bounding-box measurements, NOT ink centroids (which shift with digits).
+  // Only evaluate flat-background isolated text with measurable foreground.
   const heightRatio=b.height/a.height;
-  if(heightRatio<.55||heightRatio>1.65)return '수정본 글자 크기가 원본과 지나치게 달라.';
-  // Added/removed characters change the ink centroid without changing the
-  // baseline. Reject large vertical jumps, not horizontal ink-centroid shifts.
-  if(Math.abs(a.y-b.y)>Math.max(5,h*.25)){
-    return '수정본 글자의 세로 위치가 원본과 크게 달라.';
+  if(a.height>=8 && (heightRatio<.88||heightRatio>1.12)){
+    return '수정본 숫자 줄의 글자 높이가 원본과 달라.';
+  }
+  const centerToleranceX=Math.max(3,Math.min(10,w*.025));
+  const centerToleranceY=Math.max(3,Math.min(6,h*.055));
+  if(Math.abs(a.centerX-b.centerX)>centerToleranceX){
+    return '수정본 숫자 줄의 가로 중앙 정렬이 원본과 달라.';
+  }
+  if(Math.abs(a.centerY-b.centerY)>centerToleranceY){
+    return '수정본 숫자 줄의 세로 중심이 원본과 달라.';
+  }
+  // Allow extra digits to increase line width, but never clip against the
+  // selected rectangle. At least a few actual background pixels must remain.
+  const horizontalMargin=Math.max(2,Math.ceil(Math.min(w*.015,7)));
+  if(b.left<horizontalMargin||b.right>=w-horizontalMargin){
+    return '수정본 글자가 선택 영역 좌우 여백을 침범해.';
+  }
+  if(b.top<2||b.bottom>=h-2){
+    return '수정본 글자가 선택 영역 상하 여백을 침범해.';
   }
   return null;
 }
@@ -423,7 +440,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     if(attempt===0){
       console.warn('image label quality retry:',mismatch);
       return reviseDesignRegion(sourceBuffer,selection,
-        instruction+' This result FAILED typeface verification. Match the exact original glyph geometry, weight, stroke thickness, Korean font style, antialiasing, RGB color, baseline and letter spacing. Do not substitute a generic bold font, upscale the line, or redesign the characters.',1);
+        instruction+' CRITICAL IMAGE QA FAILURE: Keep the edited text at exactly the original visible glyph height and the original line center X and center Y. Additional digits may make the line wider, but must not make its glyphs taller. Keep clear left/right padding, the original baseline, font weight, color and the unaffected lines. Never enlarge the number or shift its horizontal alignment.',1);
     }
     throw new Error('텍스트 스타일 검수 실패: '+mismatch+' 원본은 유지했어.');
   }
