@@ -300,8 +300,8 @@ async function sendBalance(chatId,uid,credits,heading='사용 가능 횟수'){
   await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 체험: '+b.trial_left+'/'+b.trial_total+'회\n포인트: '+b.point_left+'P\n기존 유료 이용권: '+b.paid_left+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 편집 완료 후 전송 성공 시 1회 차감');
   return b;
 }
-async function obtainCredit(chatId,uid,credits,source){
-  const reserved=await credits.reserve(uid,source);
+async function obtainCredit(chatId,uid,credits,source,summary=''){
+  const reserved=await credits.reserve(uid,source,summary);
   if(!reserved.ok){
     await send(chatId,reserved.reason==='blocked'?'관리자에 의해 사용이 제한된 계정이야.':'이용 가능한 편집 횟수가 없어. /이용권구매 에서 구매를 신청할 수 있어.');
     return null;
@@ -350,7 +350,7 @@ async function handle(update,base,credits,commerce){
     if(parts[1]!=='ok')return;
     pending.delete(key);
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'확인했어. 편집을 시작할게.'});
-    const creditId=await obtainCredit(job.chatId,cb.from.id,credits,'ocr_confirm');
+    const creditId=await obtainCredit(job.chatId,cb.from.id,credits,'ocr_confirm',job.change.from+' → '+job.change.to);
     if(!creditId)return;
     try {
       const region=job.regions?.[0];
@@ -434,7 +434,7 @@ async function handle(update,base,credits,commerce){
   if(!changes){
     const request=msg.text.trim();
     if(!request.length||request.length>300) {await send(chatId,'어떤 부분을 어떻게 수정할지 짧게 말해 줘.');return;}
-    const creditId=await obtainCredit(chatId,msg.from.id,credits,'whole_image');
+    const creditId=await obtainCredit(chatId,msg.from.id,credits,'whole_image',request);
     if(!creditId)return;
     await tg('sendChatAction',{chat_id:chatId,action:'upload_document'}).catch(()=>{});
     try {
@@ -554,7 +554,7 @@ export function mountImageBot(app,base,pool,commerce){
     job.state='reserving';job.error=null;
     let creditId;
     try{
-      const reservation=await credits.reserve(job.uid,'manual_region');
+      const reservation=await credits.reserve(job.uid,'manual_region',job.change.from+' → '+job.change.to);
       if(!reservation.ok){
         job.state='failed';job.error='편집 이용권 잔여 횟수가 없어. /잔여횟수 로 확인해 줘.';
         return res.status(402).json({error:job.error,code:'NO_CREDITS'});
