@@ -401,7 +401,7 @@ async function handle(update,base,credits,commerce){
     return;
   }
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 이용권 및 포인트\n/이용권구매 - 상품 구매 신청\n/내UID - 고유 UID 확인');
+    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 이용권 및 포인트\n/이용권구매 - 상품 구매 신청\n/구매내역 - 신청 처리 상태\n/내UID - 고유 UID 확인');
     await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
     return;
   }
