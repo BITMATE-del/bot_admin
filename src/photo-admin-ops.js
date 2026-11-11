@@ -85,7 +85,7 @@ export function createPhotoAdminOps(pool){
  }
  async function orders(actor){
   await assertAdmin(actor);
-  const r=await pool.query(`SELECT id,uid::text,package_name,credits,price_usdt,payment_asset,payment_amount,payment_address,created_at
+  const r=await pool.query(`SELECT id,uid::text,package_name,credits,price_usdt,payment_asset,payment_amount,payment_address,auto_match,created_at
    FROM image_shop_orders WHERE state='pending' ORDER BY id ASC LIMIT 12`);
   return r.rows;
  }
@@ -98,6 +98,7 @@ export function createPhotoAdminOps(pool){
    await c.query('BEGIN');
    order=(await c.query('SELECT * FROM image_shop_orders WHERE id=$1 FOR UPDATE',[num])).rows[0];
    if(!order||order.state!=='pending')throw Error('이미 처리됐거나 존재하지 않는 신청입니다.');
+   if(decision==='approved' && order.auto_match)throw Error('자동충전 주문은 TronGrid 확정 거래로만 승인됩니다. 입금 내역은 자동 확인되며 임의 승인할 수 없습니다.');
    if(decision==='approved'){
     await c.query('SELECT uid FROM image_credit_accounts WHERE uid=$1 FOR UPDATE',[order.uid]);
     await c.query('UPDATE image_credit_accounts SET paid_total=paid_total+$2,updated_at=NOW() WHERE uid=$1',[order.uid,order.credits]);
