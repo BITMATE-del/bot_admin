@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
 import { reviseDesignRegion, editWholeImage, interpretImageRequest } from './ai-image-design.js';
 import { createImageCredits } from './image-credits.js';
+import { createPhotoAdminMenu } from './photo-admin-menu.js';
 
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
@@ -297,7 +298,7 @@ async function sendManualLink(chatId,jobId,base){
 
 async function sendBalance(chatId,uid,credits,heading='사용 가능 횟수'){
   const b=await credits.status(uid);
-  await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 체험: '+b.trial_left+'/'+b.trial_total+'회\n포인트: '+b.point_left+'P\n기존 유료 이용권: '+b.paid_left+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 편집 완료 후 전송 성공 시 1회 차감');
+  await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 체험권: '+b.trial_left+'회\n구매 이용권: '+(b.point_left+b.paid_left)+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 결과 전송 성공 시에만 이용권 1회 차감');
   return b;
 }
 async function obtainCredit(chatId,uid,credits,source,summary=''){
@@ -315,11 +316,12 @@ async function showPhotoShop(chatId,commerce){
   return;
  }
  await tg('sendMessage',{chat_id:chatId,
-  text:'🛍 포토샵봇 이용권 구매\\n1P = 편집 1회\\n\\n상품을 선택한 다음 입금자명을 입력하면 구매 신청이 접수돼.\\n관리자가 실제 입금을 확인하고 승인하면 포인트가 지급돼.\\n※ 자동 카드 결제는 아직 지원하지 않아.',
-  reply_markup:{inline_keyboard:shop.packages.map(p=>[{text:p.name+' · '+p.credits+'P / '+Number(p.price_krw).toLocaleString('ko-KR')+'원',callback_data:'shop:'+p.id}])}
+  text:'🛍 이용권 구매하기\n\n상품을 선택한 다음 입금자명을 입력하면 신청이 접수돼.\n관리자가 실제 입금을 확인하고 승인하면 편집 이용권이 지급돼.\n※ 자동 카드 결제는 아직 지원하지 않아.',
+  reply_markup:{inline_keyboard:shop.packages.map(p=>[{text:p.name+' · '+p.credits+'회 / '+Number(p.price_krw).toLocaleString('ko-KR')+'원',callback_data:'shop:'+p.id}])}
  });
 }
-async function handle(update,base,credits,commerce){
+async function handle(update,base,credits,commerce,adminMenu){
+  if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
   if(cb?.data?.startsWith('shop:')){
     const chatId=cb.message?.chat?.id;
@@ -334,7 +336,7 @@ async function handle(update,base,credits,commerce){
     await credits.touch(cb.from.id,cb.from);
     purchasePending.set(String(cb.from.id),{packageId:id,created:Date.now()});
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'상품을 선택했어.'});
-    await send(chatId,'구매 상품: '+product.name+' ('+product.credits+'P / '+Number(product.price_krw).toLocaleString('ko-KR')+'원)\\n입금할 분의 이름을 입력해 줘.\\n신청 접수 후 계좌 안내가 표시돼.\\n취소하려면 /취소');
+    await send(chatId,'구매 상품: '+product.name+' ('+product.credits+'회 / '+Number(product.price_krw).toLocaleString('ko-KR')+'원)\n입금할 분의 이름을 입력해 줘.\n신청 접수 후 계좌 안내가 표시돼.\n취소하려면 /취소');
     return;
   }
   if(cb?.data?.startsWith('imode:')){
@@ -385,7 +387,7 @@ async function handle(update,base,credits,commerce){
     const items=await commerce.ordersFor(userKey);
     if(!items.length){await send(chatId,'아직 구매 신청 내역이 없어. /이용권구매 에서 신청할 수 있어.');return;}
     const states={pending:'입금 확인 대기',approved:'승인 완료',rejected:'거절'};
-    await send(chatId,'🧾 최근 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+' ('+x.credits+'P / '+Number(x.price_krw).toLocaleString('ko-KR')+'원) · '+(states[x.state]||x.state)).join('\n'));
+    await send(chatId,'🧾 최근 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+' ('+x.credits+'회 / '+Number(x.price_krw).toLocaleString('ko-KR')+'원) · '+(states[x.state]||x.state)).join('\n'));
     return;
   }
   const pendingBuy=purchasePending.get(userKey);
@@ -396,12 +398,12 @@ async function handle(update,base,credits,commerce){
     purchasePending.delete(userKey);
     try{
       const order=await commerce.order(userKey,pendingBuy.packageId,depositor);
-      await send(chatId,'✅ 구매 신청 접수 (#'+order.id+')\\n상품: '+order.name+'\\n지급 예정: '+order.credits+'P\\n입금 금액: '+Number(order.price_krw).toLocaleString('ko-KR')+'원\\n입금자명: '+depositor+'\\n\\n[입금 안내]\\n'+order.instructions+'\\n\\n관리자가 입금을 확인한 뒤 승인하면 포인트가 지급돼. 신청만으로 결제된 것은 아니야.');
+      await send(chatId,'✅ 구매 신청 접수 (#'+order.id+')\n상품: '+order.name+'\n지급 예정: 이용권 '+order.credits+'회\n입금 금액: '+Number(order.price_krw).toLocaleString('ko-KR')+'원\n입금자명: '+depositor+'\n\n[입금 안내]\n'+order.instructions+'\n\n실제 입금을 확인한 뒤 관리자 승인 시 이용권이 지급돼. 신청만으로 결제된 것은 아니야.');
     }catch(e){await send(chatId,'구매 신청 실패: '+String(e.message).slice(0,200));}
     return;
   }
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 이용권 및 포인트\n/이용권구매 - 상품 구매 신청\n/구매내역 - 신청 처리 상태\n/내UID - 고유 UID 확인');
+    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 내 이용권 확인\n/이용권구매 - 이용권 구매하기\n/구매내역 - 신청 처리 상태\n/내UID - 고유 UID 확인');
     await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
     return;
   }
@@ -490,6 +492,7 @@ async function handle(update,base,credits,commerce){
 }
 export function mountImageBot(app,base,pool,commerce){
   const credits=createImageCredits(pool);
+  const adminMenu=createPhotoAdminMenu(commerce.telegramAdmin,tg,send);
   if(!token){console.log('Image bot disabled (IMAGE_BOT_TOKEN absent)');return async()=>{};}
   const secret=crypto.createHash('sha256').update(token+':image-webhook').digest('hex');
   const getManual=req=>{
@@ -606,7 +609,7 @@ export function mountImageBot(app,base,pool,commerce){
     if(recent.has(id))return res.sendStatus(200);
     recent.set(id,Date.now());
     res.sendStatus(200);
-    handle(req.body,base,credits,commerce).catch(async e=>{
+    handle(req.body,base,credits,commerce,adminMenu).catch(async e=>{
       console.error('image bot update failed:',e.message);
       const chatId=req.body?.message?.chat?.id;
       if(chatId)try{await send(chatId,'수정 실패: '+String(e.message).slice(0,200));}catch{}
