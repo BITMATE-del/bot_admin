@@ -381,6 +381,13 @@ async function handle(update,base,credits,commerce){
   const userKey=String(msg.from.id);
   if(msg.text?.trim()==='/취소'){purchasePending.delete(userKey);await send(chatId,'진행 중이던 구매 신청을 취소했어.');return;}
   if(['/이용권구매','/구매','/shop'].includes(msg.text?.trim())){await showPhotoShop(chatId,commerce);return;}
+  if(['/구매내역','/orders'].includes(msg.text?.trim())){
+    const items=await commerce.ordersFor(userKey);
+    if(!items.length){await send(chatId,'아직 구매 신청 내역이 없어. /이용권구매 에서 신청할 수 있어.');return;}
+    const states={pending:'입금 확인 대기',approved:'승인 완료',rejected:'거절'};
+    await send(chatId,'🧾 최근 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+' ('+x.credits+'P / '+Number(x.price_krw).toLocaleString('ko-KR')+'원) · '+(states[x.state]||x.state)).join('\n'));
+    return;
+  }
   const pendingBuy=purchasePending.get(userKey);
   if(pendingBuy && msg.text && !msg.text.startsWith('/')){
     if(Date.now()-pendingBuy.created>15*60*1000){purchasePending.delete(userKey);await send(chatId,'구매 입력 시간이 만료됐어. /이용권구매 로 다시 선택해 줘.');return;}
