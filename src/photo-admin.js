@@ -131,8 +131,19 @@ export function mountPhotoAdmin(app,pool){
    if(!process.env.TRONGRID_API_KEY?.trim())throw Error('TronGrid API 키 등록 전에는 자동충전을 사용할 수 없습니다.');
    await c.query(`UPDATE image_shop_orders SET state='rejected',decided_at=NOW(),
      decision_note='Payment window expired' WHERE uid=$1 AND state='pending' AND auto_match=TRUE AND expires_at<NOW()`,[uid]);
-   const existing=(await c.query("SELECT id FROM image_shop_orders WHERE uid=$1 AND state='pending' ORDER BY id DESC LIMIT 1",[uid])).rows[0];
-   if(existing)throw Error('이미 입금 확인 대기 중인 신청 #'+existing.id+'이 있습니다.');
+   const existing=(await c.query(`SELECT id,package_name,credits,price_usdt,payment_asset,payment_amount,payment_address,
+     auto_match,expires_at FROM image_shop_orders WHERE uid=$1 AND state='pending'
+     ORDER BY id DESC LIMIT 1`,[uid])).rows[0];
+   if(existing){
+    if(!existing.auto_match||!existing.payment_amount||!existing.payment_address){
+     throw Error('이전에 접수된 구매 신청 #'+existing.id+'이 처리 대기 중입니다. 관리자에게 확인해 주세요.');
+    }
+    await c.query('COMMIT');
+    return {id:existing.id,credits:existing.credits,name:existing.package_name,
+     price_usdt:existing.price_usdt,payment_asset:existing.payment_asset,
+     payment_amount:String(existing.payment_amount),payment_address:existing.payment_address,
+     expires_at:existing.expires_at,existing:true,instructions:shop.payment_instructions||''};
+   }
    const usdt=Number(pack.price_usdt);
    // A shared receiving wallet needs a unique exact deposit amount for each
    // pending order; never credit by nominal package price alone.
@@ -157,8 +168,9 @@ export function mountPhotoAdmin(app,pool){
    await c.query('COMMIT');
    return {id:result.rows[0].id,credits:pack.credits,name:pack.name,price_usdt:usdt,
      payment_asset:asset,payment_amount:amount,payment_address:address,
+     expires_at:new Date(Date.now()+24*3600000).toISOString(),
      instructions:shop.payment_instructions||''};
-  }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
+  }catch(e){await c.query('ROLLBACK').catch(()=>{});console.error('photo shop checkout failed:',{code:e.code||null,message:e.message,constraint:e.constraint||null});throw e;}finally{c.release();}
  }
  async function ordersFor(uid){
   const id=safeUid(uid);if(!id)throw Error('UID가 올바르지 않습니다.');
