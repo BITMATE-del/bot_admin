@@ -470,7 +470,7 @@ async function handle(update,base,credits,commerce,adminMenu){
         '\n네트워크: '+(asset==='USDT'?'TRON / TRC20':'TRON / TRX')+
         '\n입금 주소:\n'+order.payment_address+
         (order.instructions?'\n\n'+order.instructions:'')+
-        '\n\n입금 후 관리자에게 확인을 요청해 줘. 실제 입금 확인 후 이용권이 지급돼.\n※ 신청만으로 결제 완료 또는 지급 처리되지 않아.');
+        '\n\n⚠️ 표시된 소수점 포함 입금 수량을 정확히 보내야 자동 확인돼.\n입금 기한: 신청 후 24시간\nTRON 네트워크에서 입금이 확정되면 자동으로 이용권이 지급돼.\n※ 아직 입금하지 않았다면 주문만 생성된 상태야.');
     }catch(e){
       await send(cb.message.chat.id,'구매 신청 실패: '+String(e.message).slice(0,210));
     }
