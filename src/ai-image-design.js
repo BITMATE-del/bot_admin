@@ -136,10 +136,17 @@ function assessLabelConsistency(original,edited,w,h){
   if(Math.abs(a.brightness-b.brightness)>30)return '수정본 글자 색상 명도가 원본과 크게 달라.';
   const colorShift=Math.max(...a.color.map((v,i)=>Math.abs(v-b.color[i])));
   if(colorShift>40)return '수정본의 글자 색상이 원본과 크게 달라.';
+  // Rasterized text replacement can alter visible glyph bounds even when
+  // font size is matched (e.g. 1->7, 100000->1000000, Korean glyph changes).
+  // A 20% pixel-height limit rejected otherwise usable edits. Keep a broad
+  // guardrail against gross enlargement, but rely on border clipping, color,
+  // foreground density and the final changed-pixel check for actual defects.
   const heightRatio=b.height/a.height;
-  if(heightRatio<.8||heightRatio>1.2)return '수정본 글자 크기가 원본과 크게 달라.';
-  if(Math.abs(a.y-b.y)>Math.max(3,h*.18)||Math.abs(a.x-b.x)>Math.max(4,w*.17)){
-    return '수정본 글자의 기준 위치가 원본과 크게 달라.';
+  if(heightRatio<.55||heightRatio>1.65)return '수정본 글자 크기가 원본과 지나치게 달라.';
+  // Added/removed characters change the ink centroid without changing the
+  // baseline. Reject large vertical jumps, not horizontal ink-centroid shifts.
+  if(Math.abs(a.y-b.y)>Math.max(5,h*.25)){
+    return '수정본 글자의 세로 위치가 원본과 크게 달라.';
   }
   return null;
 }
