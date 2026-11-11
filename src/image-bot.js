@@ -346,6 +346,33 @@ async function obtainCredit(chatId,uid,credits,source,summary=''){
   }
   return reserved.id;
 }
+async function showPhotoHome(chatId,uid,adminMenu){
+ const buttons=[
+  [{text:'✏️ 편집하기',callback_data:'ui:edit'}],
+  [{text:'🎁 첫 무료 이용권 받기',callback_data:'ui:free'}],
+  [{text:'🎫 이용권 구매하기',callback_data:'ui:shop'}],
+  [{text:'📊 내 이용권',callback_data:'ui:balance'},{text:'🧾 구매 내역',callback_data:'ui:orders'}]
+ ];
+ if(await adminMenu.isAdmin(uid))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
+ await sendGuidePhoto(chatId,buttons);
+}
+async function sendInvoice(chatId,order,commerce){
+ const asset=order.payment_asset;
+ const exactly=String(order.payment_amount);
+ const text=(order.existing?'🔄 기존 입금 대기 주문 재안내':'✅ 이용권 구매 신청 완료')+
+  '\n주문 번호: #'+order.id+
+  '\n상품: '+order.name+' ('+order.credits+'매)'+
+  '\n기준 가격: '+Number(order.price_usdt).toLocaleString('en-US')+' USDT'+
+  '\n결제: '+(asset==='USDT'?'USDT (TRC20)':'TRON (TRX)')+
+  '\n\n입금 수량: '+exactly+' '+asset+
+  '\n입금 주소:\n'+order.payment_address+
+  (order.instructions?'\n\n'+order.instructions:'')+
+  '\n\n⚠️ 소수점까지 안내된 정확한 수량을 입금해 줘.\n신청 후 24시간 안에 확정되어야 자동 지급돼.\n입금 전 네트워크와 주소를 다시 확인해 줘.';
+ await tg('sendMessage',{chat_id:chatId,text,reply_markup:{inline_keyboard:[
+  [{text:'🧾 내 구매 내역',callback_data:'ui:orders'}],
+  [{text:'↩ 상품 목록',callback_data:'ui:shop'},{text:'🏠 처음으로',callback_data:'ui:home'}]
+ ]}});
+}
 async function showPhotoShop(chatId,commerce){
  const shop=await commerce.storefront();
  if(!shop.enabled||!shop.packages.length){
@@ -356,6 +383,7 @@ async function showPhotoShop(chatId,commerce){
   text:p.name+' · '+Number(p.price_usdt).toLocaleString('en-US')+' USDT',
   callback_data:'shop:'+p.id
  }]);
+ buttons.push([{text:'🧾 구매 내역',callback_data:'ui:orders'},{text:'🏠 처음으로',callback_data:'ui:home'}]);
  try{
   await sendPurchaseGuidePhoto(chatId,buttons);
  }catch(error){
@@ -416,6 +444,12 @@ async function verifyFreePass(chatId,uid,credits){
 async function handle(update,base,credits,commerce,adminMenu){
   if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
+  if(cb?.data==='ui:home'){
+    if(cb.message?.chat?.type!=='private')return;
+    await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
+    await showPhotoHome(cb.message.chat.id,cb.from.id,adminMenu);
+    return;
+  }
   if(cb?.data==='ui:edit'){
     if(cb.message?.chat?.type!=='private')return;
     await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
@@ -470,10 +504,13 @@ async function handle(update,base,credits,commerce,adminMenu){
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'결제 통화를 선택해 줘.'});
     await tg('sendMessage',{chat_id:chatId,
       text:'🎫 '+product.name+'\n가격: '+Number(product.price_usdt).toLocaleString('en-US')+' USDT\n\n결제할 통화를 선택해 줘.\nTRON(TRX)은 관리자 설정 환산율로 계산돼.',
-      reply_markup:{inline_keyboard:shop.methods.map(asset=>[{
-       text:asset==='USDT'?'USDT / TRC20':'TRON / TRX',
-       callback_data:'pay:'+id+':'+asset
-      }])}
+      reply_markup:{inline_keyboard:[
+       ...shop.methods.map(asset=>[{
+        text:asset==='USDT'?'USDT / TRC20':'TRON / TRX',
+        callback_data:'pay:'+id+':'+asset
+       }]),
+       [{text:'↩ 상품 목록',callback_data:'ui:shop'},{text:'🏠 처음으로',callback_data:'ui:home'}]
+      ]}
     });
     return;
   }
@@ -484,17 +521,15 @@ async function handle(update,base,credits,commerce,adminMenu){
     await credits.touch(cb.from.id,cb.from);
     try{
       const order=await commerce.order(String(cb.from.id),Number(id),asset);
-      await send(cb.message.chat.id,'✅ 이용권 구매 신청 #'+order.id+
-        '\n상품: '+order.name+' ('+order.credits+'매)'+
-        '\n기준 가격: '+Number(order.price_usdt).toLocaleString('en-US')+' USDT'+
-        '\n결제 통화: '+(asset==='USDT'?'USDT (TRC20)':'TRON (TRX)')+
-        '\n입금 수량: '+Number(order.payment_amount).toLocaleString('en-US',{maximumFractionDigits:6})+' '+asset+
-        '\n네트워크: '+(asset==='USDT'?'TRON / TRC20':'TRON / TRX')+
-        '\n입금 주소:\n'+order.payment_address+
-        (order.instructions?'\n\n'+order.instructions:'')+
-        '\n\n⚠️ 표시된 소수점 포함 입금 수량을 정확히 보내야 자동 확인돼.\n입금 기한: 신청 후 24시간\nTRON 네트워크에서 입금이 확정되면 자동으로 이용권이 지급돼.\n※ 아직 입금하지 않았다면 주문만 생성된 상태야.');
+      await sendInvoice(cb.message.chat.id,order,commerce);
     }catch(e){
-      await send(cb.message.chat.id,'구매 신청 실패: '+String(e.message).slice(0,210));
+      console.error('photo shop payment request failed:',{message:e.message,code:e.code||null});
+      await tg('sendMessage',{chat_id:cb.message.chat.id,
+       text:'구매 신청을 완료하지 못했어.\n원인: '+String(e.message).slice(0,185)+'\n\n다른 방법을 선택하거나 상품 목록으로 돌아가서 확인해 줘.',
+       reply_markup:{inline_keyboard:[
+        [{text:'↩ 결제 수단',callback_data:'shop:'+id}],
+        [{text:'🧾 구매 내역',callback_data:'ui:orders'},{text:'🏠 처음으로',callback_data:'ui:home'}]
+       ]}});
     }
     return;
   }
@@ -551,14 +586,7 @@ async function handle(update,base,credits,commerce,adminMenu){
     return;
   }
   if(msg.text==='/start'||msg.text==='/help'){
-    const buttons=[
-      [{text:'✏️ 편집하기',callback_data:'ui:edit'}],
-      [{text:'🎁 첫 무료 이용권 받기',callback_data:'ui:free'}],
-      [{text:'🎫 이용권 구매하기',callback_data:'ui:shop'}],
-      [{text:'📊 내 이용권',callback_data:'ui:balance'},{text:'🧾 구매 내역',callback_data:'ui:orders'}]
-    ];
-    if(await adminMenu.isAdmin(msg.from.id))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
-    await sendGuidePhoto(chatId,buttons);
+    await showPhotoHome(chatId,msg.from.id,adminMenu);
     return;
   }
   if(['/잔여횟수','/balance','/credits'].includes(msg.text?.trim())){
