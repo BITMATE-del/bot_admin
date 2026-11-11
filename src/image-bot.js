@@ -338,7 +338,7 @@ async function showPhotoShop(chatId,commerce){
   return;
  }
  await tg('sendMessage',{chat_id:chatId,
-  text:'🛍 이용권 구매하기\n\n이용권은 편집 성공 시 1매씩 차감돼.\n결제 가능: USDT(TRC20) 또는 TRON(TRX)\n\n상품 선택 → 결제 통화 선택 → 입금 안내 확인 → 관리자 승인\n※ 자동 결제 확인이 아닌 수동 승인 방식이야.',
+  text:'🛍 이용권 구매하기\n\n이용권은 편집 성공 시 1매씩 차감돼.\n결제 가능: USDT(TRC20) 또는 TRON(TRX)\n\n상품 선택 → 결제 통화 선택 → 고유 입금 수량 안내 → TronGrid 자동 확인 → 이용권 자동 지급\n※ 안내된 정확한 입금 수량과 TRON 네트워크를 확인해 줘.',
   reply_markup:{inline_keyboard:shop.packages.map(p=>[{
    text:p.name+' · '+Number(p.price_usdt).toLocaleString('en-US')+' USDT',
    callback_data:'shop:'+p.id
