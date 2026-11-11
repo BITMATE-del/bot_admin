@@ -21,6 +21,7 @@ export function createImageCredits(pool){
     state TEXT NOT NULL CHECK(state IN ('reserved','used','released')),
     source TEXT NOT NULL DEFAULT 'edit',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,finished_at TIMESTAMPTZ);
+   ALTER TABLE image_credit_usage ADD COLUMN IF NOT EXISTS request_summary TEXT NOT NULL DEFAULT '';
    CREATE INDEX IF NOT EXISTS image_credit_usage_uid_idx ON image_credit_usage(uid,state,expires_at);
    ALTER TABLE image_credit_usage DROP CONSTRAINT IF EXISTS image_credit_usage_credit_type_check;
    ALTER TABLE image_credit_usage ADD CONSTRAINT image_credit_usage_credit_type_check CHECK(credit_type IN ('trial','paid','point'));
@@ -68,7 +69,7 @@ export function createImageCredits(pool){
     uid,trialCredits,String(from.username||'').slice(0,100),
     [from.first_name,from.last_name].filter(Boolean).join(' ').slice(0,140)]);
  }
- async function reserve(value,source='edit'){
+ async function reserve(value,source='edit',summary=''){
   const uid=uidOf(value),c=await pool.connect();
   try{
    await c.query('BEGIN');await ensure(c,uid);
@@ -78,8 +79,9 @@ export function createImageCredits(pool){
    const type=balance.trial_left>0?'trial':balance.point_left>0?'point':balance.paid_left>0?'paid':null;
    if(!type){await c.query('COMMIT');return {ok:false,reason:'empty',balance};}
    const id=crypto.randomUUID();
-   await c.query(`INSERT INTO image_credit_usage(id,uid,credit_type,state,source,expires_at)
-    VALUES($1,$2,$3,'reserved',$4,NOW()+INTERVAL '45 minutes')`,[id,uid,type,String(source).slice(0,40)]);
+   await c.query(`INSERT INTO image_credit_usage(id,uid,credit_type,state,source,request_summary,expires_at)
+    VALUES($1,$2,$3,'reserved',$4,$5,NOW()+INTERVAL '45 minutes')`,
+    [id,uid,type,String(source).slice(0,40),String(summary).slice(0,200)]);
    await c.query('COMMIT');return {ok:true,id,credit_type:type};
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
