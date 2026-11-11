@@ -175,7 +175,7 @@ function showJobStatus(data){
   status.textContent='수정 완료! 텔레그램에서 이미지를 확인해 줘.';
   return true;
  }
- if(data.state==='failed')throw Error(data.error||'이미지 수정에 실패했어.');
+ if(data.state==='failed'||data.state==='interrupted')throw Error(data.error||'편집이 중단됐어. 새 작업을 만들어 줘.');
  status.textContent=data.state==='ready'
   ?'편집 요청이 아직 접수되지 않았어. 다시 전송해 줘.'
   :'편집 진행 중이야. 화면 연결이 끊겨도 서버가 작업을 계속해.';
