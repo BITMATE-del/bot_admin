@@ -358,6 +358,22 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
      (sourceDarkFraction<.55 || sourceVariance>Math.max(500,variance*8))){
     throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
   }
+  // A large, newly dark rectangle is usually an AI fill artifact, not text.
+  // The previous flat-black check missed noisy dark patches (e.g. 82% dark,
+  // high variance). Retry once using explicit background conservation, then
+  // reject without charging if the regenerated patch is still corrupted.
+  if(sourceDarkFraction<.20 && darkFraction>.60 &&
+     darkFraction-sourceDarkFraction>.45){
+    if(attempt===0){
+      console.warn('image patch dark-fill retry',JSON.stringify({
+        width:w,height:h,darkFraction:+darkFraction.toFixed(3),
+        sourceDarkFraction:+sourceDarkFraction.toFixed(3)
+      }));
+      return reviseDesignRegion(sourceBuffer,selection,
+        instruction+' URGENT: Do not darken, shade, fill, or repaint the surrounding background. Preserve the original background pixels and the original text color. Replace only the specified characters without a rectangular dark region.',1);
+    }
+    throw new Error('AI가 글자 대신 배경을 어둡게 변형해 잘못된 편집을 차단했어. 원본은 유지했어.');
+  }
   const labelOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
     .ensureAlpha().raw().toBuffer();
   // On flat UI label backgrounds, reject foreground pixels that touch the
@@ -380,15 +396,26 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     Math.abs(p[0]-bg[0]),Math.abs(p[1]-bg[1]),Math.abs(p[2]-bg[2])
   ),0)/Math.max(1,borderSamples.length);
   if(borderNoise<14){
-    let sourceInk=0,rightInk=0;
+    let sourceInk=0,rightInk=0,originalRightInk=0;
     for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++){
       const i=(yy*w+xx)*4;
       if(delta(labelOriginal,i)>=42)sourceInk++;
-      if(xx>=w-edgeBand && yy>=2 && yy<h-2 && delta(bytes,i)>=48)rightInk++;
+      if(xx>=w-edgeBand && yy>=2 && yy<h-2){
+        if(delta(bytes,i)>=48)rightInk++;
+        if(delta(labelOriginal,i)>=48)originalRightInk++;
+      }
     }
+    // Do not flag an original label that already touches the chosen border.
+    // A newly created, substantial edge contact is evidence of clipping.
     if(sourceInk>=Math.max(4,Math.floor(w*h*.012)) && sourceInk<w*h*.45 &&
-       rightInk>=Math.max(3,Math.ceil(h*.09))){
-      throw new Error('글자가 선택 영역 오른쪽 경계에 닿아 잘릴 가능성이 있어. 오른쪽 여유를 포함해 다시 선택해 줘.');
+       rightInk>=Math.max(3,Math.ceil(h*.09)) &&
+       rightInk>originalRightInk+Math.max(2,Math.ceil(h*.04))){
+      if(attempt===0){
+        console.warn('image right-edge clipping retry',JSON.stringify({width:w,height:h,rightInk,originalRightInk}));
+        return reviseDesignRegion(sourceBuffer,selection,
+          instruction+' CRITICAL: Place every replaced glyph entirely within the selected box. Leave clear space at its RIGHT boundary; do not clip the final digit or Korean character. Keep source glyph size, baseline, and background unchanged.',1);
+      }
+      throw new Error('수정한 글자가 선택 영역 오른쪽에서 실제로 잘릴 위험이 있어. 원본을 유지했어. 다음 시도에서는 오른쪽 여백까지 더 넓게 선택해 줘.');
     }
   }
   const mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
