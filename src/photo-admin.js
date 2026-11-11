@@ -104,7 +104,7 @@ export function mountPhotoAdmin(app,pool){
    const uid=safeUid(req.params.uid);if(!uid)return res.sendStatus(400);
    const [balance,history,orders]=await Promise.all([
     credits.status(uid),
-    pool.query(`SELECT id,credit_type,state,source,created_at,finished_at FROM image_credit_usage
+    pool.query(`SELECT id,credit_type,state,source,request_summary,created_at,finished_at FROM image_credit_usage
      WHERE uid=$1 ORDER BY created_at DESC LIMIT 50`,[uid]),
     pool.query(`SELECT id,package_name,credits,price_krw,state,depositor,created_at,decided_at
      FROM image_shop_orders WHERE uid=$1 ORDER BY id DESC LIMIT 30`,[uid])
