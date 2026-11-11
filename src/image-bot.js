@@ -394,6 +394,22 @@ async function verifyFreePass(chatId,uid,credits){
 async function handle(update,base,credits,commerce,adminMenu){
   if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
+  if(cb?.data==='ui:edit'){
+    if(cb.message?.chat?.type!=='private')return;
+    await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
+    await credits.touch(cb.from.id,cb.from);
+    const balance=await credits.status(cb.from.id);
+    if(balance.is_blocked){
+      await send(cb.message.chat.id,'관리자가 사용을 제한한 계정이야.');
+    }else if(balance.remaining<1){
+      await send(cb.message.chat.id,'🎫 사용 가능한 편집 이용권이 없어.\n첫 무료 이용권 받기 또는 이용권 구매하기 메뉴를 이용해 줘.');
+    }else{
+      sessions.delete(cb.message.chat.id);
+      pending.delete(String(cb.from.id));
+      await send(cb.message.chat.id,'✏️ 이미지 편집하기\n\n수정할 이미지를 이 채팅에 사진 또는 파일로 업로드해 줘.\n이미지를 받으면 바꿀 문구를 입력하고 수정할 영역을 선택할 수 있어.\n\n잔여 이용권: '+balance.remaining+'매');
+    }
+    return;
+  }
   if(['ui:free','ui:verifyfree'].includes(cb?.data)){
     if(cb.message?.chat?.type!=='private')return;
     await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
@@ -514,6 +530,7 @@ async function handle(update,base,credits,commerce,adminMenu){
   }
   if(msg.text==='/start'||msg.text==='/help'){
     const buttons=[
+      [{text:'✏️ 편집하기',callback_data:'ui:edit'}],
       [{text:'🎁 첫 무료 이용권 받기',callback_data:'ui:free'}],
       [{text:'🎫 이용권 구매하기',callback_data:'ui:shop'}],
       [{text:'📊 내 이용권',callback_data:'ui:balance'},{text:'🧾 구매 내역',callback_data:'ui:orders'}]
