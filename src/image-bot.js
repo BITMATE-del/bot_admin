@@ -334,12 +334,15 @@ async function obtainCredit(chatId,uid,credits,source,summary=''){
 async function showPhotoShop(chatId,commerce){
  const shop=await commerce.storefront();
  if(!shop.enabled||!shop.packages.length){
-  await send(chatId,'현재 이용권 구매 신청이 준비 중이야. 관리자 설정 후 판매가 시작돼.');
+  await send(chatId,'현재 이용권 구매 준비 중이야. 결제 지갑 설정이 완료되면 구매할 수 있어.');
   return;
  }
  await tg('sendMessage',{chat_id:chatId,
-  text:'🛍 이용권 구매하기\n\n상품을 선택한 다음 입금자명을 입력하면 신청이 접수돼.\n관리자가 실제 입금을 확인하고 승인하면 편집 이용권이 지급돼.\n※ 자동 카드 결제는 아직 지원하지 않아.',
-  reply_markup:{inline_keyboard:shop.packages.map(p=>[{text:p.name+' · '+p.credits+'회 / '+Number(p.price_krw).toLocaleString('ko-KR')+'원',callback_data:'shop:'+p.id}])}
+  text:'🛍 이용권 구매하기\n\n이용권은 편집 성공 시 1매씩 차감돼.\n결제 가능: USDT(TRC20) 또는 TRON(TRX)\n\n상품 선택 → 결제 통화 선택 → 입금 안내 확인 → 관리자 승인\n※ 자동 결제 확인이 아닌 수동 승인 방식이야.',
+  reply_markup:{inline_keyboard:shop.packages.map(p=>[{
+   text:p.name+' · '+Number(p.price_usdt).toLocaleString('en-US')+' USDT',
+   callback_data:'shop:'+p.id
+  }])}
  });
 }
 async function showFreePass(chatId,uid,credits){
@@ -409,7 +412,8 @@ async function handle(update,base,credits,commerce,adminMenu){
       const items=await commerce.ordersFor(String(uid));
       const states={pending:'입금 확인 대기',approved:'승인 완료',rejected:'거절'};
       await send(chatId,items.length
-        ?'🧾 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+' ('+x.credits+'회 / '+Number(x.price_krw).toLocaleString('ko-KR')+'원) · '+(states[x.state]||x.state)).join('\n')
+        ?'🧾 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+
+          ' ('+x.credits+'매 / '+Number(x.payment_amount||0).toLocaleString('en-US')+' '+(x.payment_asset||'USDT')+') · '+(states[x.state]||x.state)).join('\n')
         :'아직 구매 신청 내역이 없어.');
     }
     return;
@@ -425,9 +429,35 @@ async function handle(update,base,credits,commerce,adminMenu){
       return;
     }
     await credits.touch(cb.from.id,cb.from);
-    purchasePending.set(String(cb.from.id),{packageId:id,created:Date.now()});
-    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'상품을 선택했어.'});
-    await send(chatId,'구매 상품: '+product.name+' ('+product.credits+'회 / '+Number(product.price_krw).toLocaleString('ko-KR')+'원)\n입금할 분의 이름을 입력해 줘.\n신청 접수 후 계좌 안내가 표시돼.\n취소하려면 /취소');
+    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'결제 통화를 선택해 줘.'});
+    await tg('sendMessage',{chat_id:chatId,
+      text:'🎫 '+product.name+'\n가격: '+Number(product.price_usdt).toLocaleString('en-US')+' USDT\n\n결제할 통화를 선택해 줘.\nTRON(TRX)은 관리자 설정 환산율로 계산돼.',
+      reply_markup:{inline_keyboard:shop.methods.map(asset=>[{
+       text:asset==='USDT'?'USDT / TRC20':'TRON / TRX',
+       callback_data:'pay:'+id+':'+asset
+      }])}
+    });
+    return;
+  }
+  if(cb?.data?.startsWith('pay:')){
+    if(cb.message?.chat?.type!=='private')return;
+    const [,id,asset]=cb.data.split(':');
+    await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
+    await credits.touch(cb.from.id,cb.from);
+    try{
+      const order=await commerce.order(String(cb.from.id),Number(id),asset);
+      await send(cb.message.chat.id,'✅ 이용권 구매 신청 #'+order.id+
+        '\n상품: '+order.name+' ('+order.credits+'매)'+
+        '\n기준 가격: '+Number(order.price_usdt).toLocaleString('en-US')+' USDT'+
+        '\n결제 통화: '+(asset==='USDT'?'USDT (TRC20)':'TRON (TRX)')+
+        '\n입금 수량: '+Number(order.payment_amount).toLocaleString('en-US',{maximumFractionDigits:6})+' '+asset+
+        '\n네트워크: TRON (TRC20)'+
+        '\n입금 주소:\n'+order.payment_address+
+        (order.instructions?'\n\n'+order.instructions:'')+
+        '\n\n입금 후 관리자에게 확인을 요청해 줘. 실제 입금 확인 후 이용권이 지급돼.\n※ 신청만으로 결제 완료 또는 지급 처리되지 않아.');
+    }catch(e){
+      await send(cb.message.chat.id,'구매 신청 실패: '+String(e.message).slice(0,210));
+    }
     return;
   }
   if(cb?.data?.startsWith('imode:')){
@@ -480,18 +510,6 @@ async function handle(update,base,credits,commerce,adminMenu){
     if(!items.length){await send(chatId,'아직 구매 신청 내역이 없어. /이용권구매 에서 신청할 수 있어.');return;}
     const states={pending:'입금 확인 대기',approved:'승인 완료',rejected:'거절'};
     await send(chatId,'🧾 최근 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+' ('+x.credits+'회 / '+Number(x.price_krw).toLocaleString('ko-KR')+'원) · '+(states[x.state]||x.state)).join('\n'));
-    return;
-  }
-  const pendingBuy=purchasePending.get(userKey);
-  if(pendingBuy && msg.text && !msg.text.startsWith('/')){
-    if(Date.now()-pendingBuy.created>15*60*1000){purchasePending.delete(userKey);await send(chatId,'구매 입력 시간이 만료됐어. /이용권구매 로 다시 선택해 줘.');return;}
-    const depositor=msg.text.trim();
-    if(depositor.length<2||depositor.length>40){await send(chatId,'입금자명을 2~40자로 입력해 줘.');return;}
-    purchasePending.delete(userKey);
-    try{
-      const order=await commerce.order(userKey,pendingBuy.packageId,depositor);
-      await send(chatId,'✅ 구매 신청 접수 (#'+order.id+')\n상품: '+order.name+'\n지급 예정: 이용권 '+order.credits+'회\n입금 금액: '+Number(order.price_krw).toLocaleString('ko-KR')+'원\n입금자명: '+depositor+'\n\n[입금 안내]\n'+order.instructions+'\n\n실제 입금을 확인한 뒤 관리자 승인 시 이용권이 지급돼. 신청만으로 결제된 것은 아니야.');
-    }catch(e){await send(chatId,'구매 신청 실패: '+String(e.message).slice(0,200));}
     return;
   }
   if(msg.text==='/start'||msg.text==='/help'){
