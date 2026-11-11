@@ -128,11 +128,48 @@ function assessLabelConsistency(original,edited,w,h){
     return count?{count,x:sumX/count,y:sumY/count,brightness:sumBrightness/count,
       color:[sumR/count,sumG/count,sumB/count],height:maxY-minY+1}:null;
   };
+  // Measure stroke thickness independently of the number of characters.
+  // A regenerated bold/sans-serif font can pass overall color and height
+  // checks while still looking different from the source typeface.
+  const strokeWidth=bytes=>{
+    const horizontal=[],vertical=[];
+    const ink=(x,y)=>{
+      const i=(y*w+x)*4;
+      return colorDistance(bytes[i],bytes[i+1],bytes[i+2])>=42;
+    };
+    for(let y=2;y<h-2;y++){
+      let run=0;
+      for(let x=1;x<w;x++){
+        if(ink(x,y))run++;
+        else if(run){if(run<=Math.min(24,Math.ceil(h*.6)))horizontal.push(run);run=0;}
+      }
+    }
+    for(let x=2;x<w-2;x++){
+      let run=0;
+      for(let y=1;y<h;y++){
+        if(ink(x,y))run++;
+        else if(run){if(run<=Math.min(24,Math.ceil(h*.6)))vertical.push(run);run=0;}
+      }
+    }
+    const robust=arr=>{
+      if(arr.length<8)return null;
+      arr.sort((a,b)=>a-b);
+      // A trimmed upper-half median reduces sensitivity to antialiasing dots.
+      return arr[Math.floor(arr.length*.60)];
+    };
+    return {horizontal:robust(horizontal),vertical:robust(vertical)};
+  };
   const a=sample(original),b=sample(edited);
   if(!a||a.count<n*.012||a.count>n*.4)return null;
   if(!b)return '편집 영역에서 글자 형태가 사라졌어.';
   const density=b.count/a.count;
   if(density<.45||density>2.2)return '수정본 글자의 전체 획 밀도가 원본과 크게 달라.';
+  const beforeStroke=strokeWidth(original),afterStroke=strokeWidth(edited);
+  const strokeRatios=['horizontal','vertical']
+    .filter(axis=>beforeStroke[axis]!==null&&afterStroke[axis]!==null&&beforeStroke[axis]>=2)
+    .map(axis=>afterStroke[axis]/beforeStroke[axis]);
+  if(strokeRatios.some(ratio=>ratio<.68||ratio>1.45))
+    return '수정본 글꼴의 획 두께가 원본과 크게 달라.';
   if(Math.abs(a.brightness-b.brightness)>30)return '수정본 글자 색상 명도가 원본과 크게 달라.';
   const colorShift=Math.max(...a.color.map((v,i)=>Math.abs(v-b.color[i])));
   if(colorShift>40)return '수정본의 글자 색상이 원본과 크게 달라.';
@@ -336,7 +373,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     if(attempt===0){
       console.warn('image label quality retry:',mismatch);
       return reviseDesignRegion(sourceBuffer,selection,
-        instruction+' Preserve the source label height, RGB color, glyph density and vertical alignment. Do not upscale or recolor the label.',1);
+        instruction+' This result FAILED typeface verification. Match the exact original glyph geometry, weight, stroke thickness, Korean font style, antialiasing, RGB color, baseline and letter spacing. Do not substitute a generic bold font, upscale the line, or redesign the characters.',1);
     }
     throw new Error('텍스트 스타일 검수 실패: '+mismatch+' 원본은 유지했어.');
   }
