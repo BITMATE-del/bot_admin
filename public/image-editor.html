@@ -181,22 +181,44 @@ function showJobStatus(data){
   :'편집 진행 중이야. 화면 연결이 끊겨도 서버가 작업을 계속해.';
  return false;
 }
-async function statusPoll(){
- let connectionErrors=0;
+// Transient HTTP and browser connection errors do not mean an accepted edit failed.
+const inProgressStates=new Set(['reserving','preparing','editing','verifying','sending']);
+const transientStatusError=e=>/fetch|network|Load failed|상태 조회 실패 \\(5\\d\\d\\)|Failed to fetch|connection|timeout/i.test(String(e?.message||''));
+async function statusPoll({uncertainSubmission=false}={}){
+ let connectionErrors=0,notFound=0;
+ // Keep the existing bounded poll time and 30-minute server job TTL.
  for(let i=0;i<180;i++){
   await sleep(2000);
+  let data;
   try{
-   const data=await loadJobStatus();
-   connectionErrors=0;
-   if(showJobStatus(data))return;
+   data=await loadJobStatus();
   }catch(e){
-   if(!/fetch|network|Load failed|상태 조회/i.test(e.message||''))throw e;
-   connectionErrors++;
-   status.textContent='상태 확인 연결이 불안정해. 서버 작업은 별도로 진행되며 텔레그램에도 결과가 전달돼.';
-   if(connectionErrors>=10)throw Error('상태 확인 연결을 여러 번 실패했어. 작업 완료 또는 실패 안내는 텔레그램에서 확인해 줘.');
+   if(/편집 작업을 찾지 못했어/.test(e.message||'')){
+    // A 404 after an accepted edit indicates a lost server job, not a
+    // request to resubmit blindly. Confirm it before showing a terminal state.
+    notFound++;
+    if(notFound>=3)throw Error('작업 정보가 서버에서 사라졌어. 서버가 재시작됐을 수 있어. 텔레그램에서 결과를 확인한 뒤 새 작업을 시작해 줘.');
+   }else if(transientStatusError(e)){
+    connectionErrors++;
+    if(connectionErrors>=30)throw Error('상태 확인 연결이 오래 지연되고 있어. 중복 편집하지 말고 텔레그램의 완료/실패 메시지를 확인해 줘.');
+   }else throw e;
+   status.textContent='서버 연결을 다시 확인하고 있어. 중복 편집은 전송하지 않아.';
+   continue;
   }
+  connectionErrors=0;notFound=0;
+  if(uncertainSubmission&&data.state==='ready'){
+   // A lost POST is not an accepted edit. Keep polling for a short
+   // reconciliation window instead of making another POST automatically.
+   if(i>=14)throw Error('편집 요청이 서버에 접수됐는지 확인되지 않았어. 중복 요청하지 말고 텔레그램 메시지를 확인해 줘.');
+   status.textContent='접수 여부를 확인 중이야. 같은 요청은 다시 전송하지 않아.';
+   continue;
+  }
+  if(data.state==='ready'&&!uncertainSubmission){
+   throw Error('접수 완료 응답 이후 작업이 대기 상태로 돌아갔어. 중복 요청하지 말고 텔레그램 안내를 확인해 줘.');
+  }
+  if(showJobStatus(data))return;
  }
- throw Error('상태 확인 시간이 초과됐어. 텔레그램에서 결과를 확인해 줘.');
+ throw Error('상태 확인 시간이 초과됐어. 중복 편집하지 말고 텔레그램에서 결과를 확인해 줘.');
 }
 sub.addEventListener('click',async()=>{
  if(!rect)return;
@@ -211,34 +233,37 @@ sub.addEventListener('click',async()=>{
     body:JSON.stringify({...rect,after:after.value,angle:Number(document.getElementById('angle').value)})
    });
   }catch(error){
-   // Browser connection loss does not prove the server rejected the POST.
-   // First reconcile the job state; never silently submit a second request.
-   status.textContent='전송 연결이 잠시 끊겼어. 서버 접수 여부를 확인 중이야.';
-   let known=null;
-   try{known=await loadJobStatus()}catch{}
-   if(known && known.state==='done'){showJobStatus(known);return;}
-   if(known && known.state==='failed')showJobStatus(known);
-   if(known && ['reserving','preparing','editing','verifying','sending'].includes(known.state)){
-    await statusPoll();return;
-   }
-   throw Error('서버 접수 여부를 확인할 수 없어. 중복 편집을 피하려면 텔레그램의 완료/실패 안내를 확인해 줘.');
+   // A failed browser POST gives no proof of server rejection.
+   // Never repeat a paid edit automatically or enable duplicate submission.
+   status.textContent='접수 응답이 끊겼어. 서버 작업 상태를 확인 중이야.';
+   await statusPoll({uncertainSubmission:true});
+   return;
   }
-  const payload=await response.json();
+  let payload={};
+  try{payload=await response.json()}catch{}
   if(!response.ok){
-    if(payload.code==='TEXT_REGION_TOO_NARROW'){
-      rect=null;draw();sel.textContent='글자가 잘리지 않도록 좌우 여백을 포함해 새 영역을 선택해 줘.';
-    }
-    throw Error(payload.error||'접수에 실패했어.');
+   if([502,503,504].includes(response.status)){
+    status.textContent='서버 연결이 불안정해 접수 여부를 확인 중이야.';
+    await statusPoll({uncertainSubmission:true});
+    return;
+   }
+   if(payload.code==='TEXT_REGION_TOO_NARROW'){
+    rect=null;draw();sel.textContent='글자가 잘리지 않도록 좌우 여백을 포함해 새 영역을 선택해 줘.';
+   }
+   throw Error(payload.error||'편집 요청이 거절됐어 ('+response.status+').');
   }
   if(payload.state==='done'){renderProgress({progress:100,message:'완료',elapsedSeconds:0});status.textContent='완료! 텔레그램을 확인해 줘.';return;}
+  if(response.status!==202&&!inProgressStates.has(payload.state)){
+   throw Error('예상하지 못한 접수 응답이야. 중복 전송하지 말고 텔레그램 상태를 확인해 줘.');
+  }
   renderProgress({progress:15,message:'접수 완료 · 이미지 준비 중',elapsedSeconds:0});
-  status.textContent='접수 완료. 작업 상태를 확인하고 있어.';
+  status.textContent='편집 요청 접수 완료. 진행 상태를 확인 중이야.';
   await statusPoll();
  }catch(error){
-  status.textContent='오류: '+error.message;
-  // For an uncertain network error, repeating the same job can trigger a
-  // duplicate operation. Refreshing the page is safer than resubmitting.
-  sub.disabled=/접수 여부를 확인할 수 없어|여러 번 실패|상태 확인 시간이 초과/.test(error.message);
+  status.textContent='안내: '+error.message;
+  // Only explicitly rejected requests may be retried by the operator.
+  // For unknown/accepted work, never enable a duplicate charge/edit.
+  sub.disabled=!(/편집 요청이 거절됐어|Unexpected replacement value|Invalid edit selection|글자가 잘리지 않도록/.test(error.message));
  }
 });
 try{
