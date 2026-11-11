@@ -12,7 +12,7 @@ const safeUid=x=>/^\d{1,19}$/.test(String(x||''))?String(x):null;
 const hmac=x=>crypto.createHmac('sha256',secret()).update(x).digest('hex');
 const equal=(a,b)=>{const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&crypto.timingSafeEqual(x,y)};
 const cookie=req=>Object.fromEntries(String(req.get('cookie')||'').split(';').map(p=>p.trim().split('=').slice(0,2))).photo_admin||'';
-const cookieFlags=req=>'; Path=/photo-admin; HttpOnly; SameSite=Strict'+(req.secure||req.get('x-forwarded-proto')==='https'?'; Secure':'');
+const cookieFlags=req=>'; Path=/; HttpOnly; SameSite=Strict'+(req.secure||req.get('x-forwarded-proto')==='https'?'; Secure':'');
 const recentLogins=new Map();
 
 export function mountPhotoAdmin(app,pool){
