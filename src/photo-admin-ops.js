@@ -85,7 +85,7 @@ export function createPhotoAdminOps(pool){
  }
  async function orders(actor){
   await assertAdmin(actor);
-  const r=await pool.query(`SELECT id,uid::text,package_name,credits,price_krw,depositor,created_at
+  const r=await pool.query(`SELECT id,uid::text,package_name,credits,price_usdt,payment_asset,payment_amount,payment_address,created_at
    FROM image_shop_orders WHERE state='pending' ORDER BY id ASC LIMIT 12`);
   return r.rows;
  }
@@ -103,7 +103,7 @@ export function createPhotoAdminOps(pool){
     await c.query('UPDATE image_credit_accounts SET paid_total=paid_total+$2,updated_at=NOW() WHERE uid=$1',[order.uid,order.credits]);
    }
    await c.query('UPDATE image_shop_orders SET state=$2,decided_at=NOW() WHERE id=$1',[num,decision]);
-   await log(c,actor,'telegram_order_'+decision,order.uid,{order_id:num,passes:order.credits,amount:order.price_krw});
+   await log(c,actor,'telegram_order_'+decision,order.uid,{order_id:num,passes:order.credits,amount:order.payment_amount,asset:order.payment_asset});
    await c.query('COMMIT');
    return {uid:String(order.uid),order_id:num,passes:order.credits,decision};
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
@@ -111,31 +111,34 @@ export function createPhotoAdminOps(pool){
  async function packages(actor){
   await assertAdmin(actor);
   const [p,s]=await Promise.all([
-   pool.query('SELECT id,name,credits,price_krw,active FROM image_shop_packages ORDER BY sort_order,id'),
-   pool.query('SELECT enabled,instructions FROM image_shop_settings WHERE singleton=TRUE')
+   pool.query('SELECT id,name,credits,price_usdt,active FROM image_shop_packages WHERE price_usdt>0 ORDER BY sort_order,id'),
+   pool.query('SELECT enabled,usdt_trc20_address,trx_address,trx_per_usdt,payment_instructions FROM image_shop_settings WHERE singleton=TRUE')
   ]);
   return {packages:p.rows,settings:s.rows[0]};
  }
  async function changePackage(actor,id,price,active){
   await assertAdmin(actor);const num=Number(id),amount=Number(price);
-  if(!Number.isSafeInteger(num)||num<1||!Number.isSafeInteger(amount)||amount<0||amount>100000000||typeof active!=='boolean')
-   throw Error('상품과 가격을 확인해 주세요.');
+  if(!Number.isSafeInteger(num)||num<1||!Number.isFinite(amount)||amount<=0||amount>100000||typeof active!=='boolean')
+   throw Error('상품 번호 또는 USDT 가격이 올바르지 않습니다.');
   const c=await pool.connect();
   try{
    await c.query('BEGIN');
-   const r=await c.query('UPDATE image_shop_packages SET price_krw=$2,active=$3 WHERE id=$1 RETURNING id,name,credits,price_krw,active',[num,amount,active]);
+   const r=await c.query('UPDATE image_shop_packages SET price_usdt=$2,active=$3 WHERE id=$1 RETURNING id,name,credits,price_usdt,active',[num,amount,active]);
    if(!r.rowCount)throw Error('상품이 없습니다.');
    await log(c,actor,'telegram_package',null,r.rows[0]);await c.query('COMMIT');return r.rows[0];
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
- async function settings(actor,enabled,instructions){
+ async function settings(actor,enabled){
   await assertAdmin(actor);
   if(typeof enabled!=='boolean')throw Error('판매 상태가 올바르지 않습니다.');
   if(enabled){
-   const r=await pool.query('SELECT instructions FROM image_shop_settings WHERE singleton=TRUE');
-   if(!r.rows[0]?.instructions.includes('입금'))throw Error('판매 활성화 전에 입금 안내를 설정해 주세요.');
-   const count=(await pool.query('SELECT COUNT(*)::int AS n FROM image_shop_packages WHERE active=TRUE AND price_krw>0')).rows[0].n;
-   if(!count)throw Error('가격과 판매 상품을 먼저 설정해 주세요.');
+   const r=await pool.query('SELECT usdt_trc20_address,trx_address,trx_per_usdt FROM image_shop_settings WHERE singleton=TRUE');
+   const st=r.rows[0]||{};
+   const addressOk=v=>/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(v||'');
+   if(!addressOk(st.usdt_trc20_address)&&!(addressOk(st.trx_address)&&Number(st.trx_per_usdt)>0))
+    throw Error('USDT(TRC20) 또는 TRX 지갑 주소 및 환산율을 먼저 설정하세요.');
+   const count=(await pool.query('SELECT COUNT(*)::int AS n FROM image_shop_packages WHERE active=TRUE AND price_usdt>0')).rows[0].n;
+   if(!count)throw Error('판매 상품을 먼저 설정해 주세요.');
   }
   const c=await pool.connect();
   try{await c.query('BEGIN');
@@ -144,14 +147,23 @@ export function createPhotoAdminOps(pool){
    await c.query('COMMIT');
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
- async function instructions(actor,value){
+ async function paymentSettings(actor,field,value){
   await assertAdmin(actor);
-  const v=String(value||'').trim();
-  if(v.length<6||v.length>900||!v.includes('입금'))throw Error('입금 방법을 포함한 안내 문구(6~900자)를 입력해 주세요.');
+  const allowed=['usdt_trc20_address','trx_address','trx_per_usdt','payment_instructions'];
+  if(!allowed.includes(field))throw Error('지원하지 않는 설정입니다.');
+  const raw=String(value||'').trim();
+  let v=raw;
+  if(field.endsWith('_address')){
+   if(!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(raw))throw Error('TRON 네트워크 지갑 주소 형식을 확인해 주세요.');
+  }else if(field==='trx_per_usdt'){
+   const n=Number(raw);
+   if(!Number.isFinite(n)||n<=0||n>100000)throw Error('1 USDT당 TRX 환산 수량을 올바르게 입력하세요.');
+   v=n;
+  }else if(raw.length>900)throw Error('안내 문구는 900자 이내로 입력해 주세요.');
   const c=await pool.connect();
   try{await c.query('BEGIN');
-   await c.query('UPDATE image_shop_settings SET instructions=$1,updated_at=NOW() WHERE singleton=TRUE',[v]);
-   await log(c,actor,'telegram_shop_instructions',null,{length:v.length});
+   await c.query('UPDATE image_shop_settings SET '+field+'=$1,updated_at=NOW() WHERE singleton=TRUE',[v]);
+   await log(c,actor,'telegram_payment_setting',null,{field,...(field==='trx_per_usdt'?{rate:v}:{})});
    await c.query('COMMIT');
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
@@ -179,5 +191,5 @@ export function createPhotoAdminOps(pool){
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
  return {init,isAdmin,isOwner,overview,users,user,adjust,block,orders,decide,packages,
-  changePackage,settings,instructions,admins,grant,revoke};
+  changePackage,settings,paymentSettings,admins,grant,revoke};
 }
