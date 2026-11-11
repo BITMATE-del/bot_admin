@@ -1,7 +1,7 @@
 // Telegram-UID-only administration for the photo editor bot.
 // Admins must be granted by trusted owners and every action rechecks UID.
 const safeUid=v=>/^\d{1,19}$/.test(String(v??''))?String(v):null;
-const owners=()=>new Set(String(process.env.IMAGE_ADMIN_UIDS||process.env.OPERATOR_TELEGRAM_IDS||'').split(',').map(s=>s.trim()).filter(x=>safeUid(x)));
+const owners=()=>new Set([process.env.OPERATOR_TELEGRAM_IDS,process.env.IMAGE_ADMIN_UIDS].filter(Boolean).join(',').split(',').map(s=>s.trim()).filter(x=>safeUid(x)));
 export function createPhotoAdminOps(pool){
  async function init(){
   await pool.query(`CREATE TABLE IF NOT EXISTS image_bot_admins(
