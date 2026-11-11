@@ -11,6 +11,7 @@ const sessions = new Map();
 const pending = new Map();
 const manualJobs = new Map();
 const successfulEditDurations=[];
+const purchasePending=new Map();
 function estimateRemaining(state,elapsed){
   if(state==='done')return {min:0,max:0,basis:'complete'};
   if(state==='ready'||state==='failed')return {min:null,max:null,basis:'none'};
@@ -296,19 +297,46 @@ async function sendManualLink(chatId,jobId,base){
 
 async function sendBalance(chatId,uid,credits,heading='사용 가능 횟수'){
   const b=await credits.status(uid);
-  await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 체험: '+b.trial_left+'/'+b.trial_total+'회\n충전 잔여: '+b.paid_left+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 편집 완료 후 전송에 성공한 경우만 차감돼.');
+  await send(chatId,'🎫 '+heading+'\n고유 UID: '+b.uid+'\n무료 체험: '+b.trial_left+'/'+b.trial_total+'회\n포인트: '+b.point_left+'P\n기존 유료 이용권: '+b.paid_left+'회\n전체 잔여: '+b.remaining+'회\n완료한 편집: '+b.used+'회\n※ 편집 완료 후 전송 성공 시 1회 차감');
   return b;
 }
 async function obtainCredit(chatId,uid,credits,source){
   const reserved=await credits.reserve(uid,source);
   if(!reserved.ok){
-    await send(chatId,'무료 체험 횟수를 모두 사용했어.\n현재 남은 편집 횟수: 0회\n충전 기능은 추후 제공될 예정이야. /잔여횟수 로 확인할 수 있어.');
+    await send(chatId,reserved.reason==='blocked'?'관리자에 의해 사용이 제한된 계정이야.':'이용 가능한 편집 횟수가 없어. /이용권구매 에서 구매를 신청할 수 있어.');
     return null;
   }
   return reserved.id;
 }
-async function handle(update,base,credits){
+async function showPhotoShop(chatId,commerce){
+ const shop=await commerce.storefront();
+ if(!shop.enabled||!shop.packages.length){
+  await send(chatId,'현재 이용권 구매 신청이 준비 중이야. 관리자 설정 후 판매가 시작돼.');
+  return;
+ }
+ await tg('sendMessage',{chat_id:chatId,
+  text:'🛍 포토샵봇 이용권 구매\\n1P = 편집 1회\\n\\n상품을 선택한 다음 입금자명을 입력하면 구매 신청이 접수돼.\\n관리자가 실제 입금을 확인하고 승인하면 포인트가 지급돼.\\n※ 자동 카드 결제는 아직 지원하지 않아.',
+  reply_markup:{inline_keyboard:shop.packages.map(p=>[{text:p.name+' · '+p.credits+'P / '+Number(p.price_krw).toLocaleString('ko-KR')+'원',callback_data:'shop:'+p.id}])}
+ });
+}
+async function handle(update,base,credits,commerce){
   const cb=update.callback_query;
+  if(cb?.data?.startsWith('shop:')){
+    const chatId=cb.message?.chat?.id;
+    if(!chatId||cb.message.chat.type!=='private')return;
+    const id=Number(cb.data.slice(5));
+    const shop=await commerce.storefront();
+    const product=shop.enabled&&shop.packages.find(p=>Number(p.id)===id);
+    if(!product){
+      await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'판매하지 않는 상품이야.',show_alert:true});
+      return;
+    }
+    await credits.touch(cb.from.id,cb.from);
+    purchasePending.set(String(cb.from.id),{packageId:id,created:Date.now()});
+    await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'상품을 선택했어.'});
+    await send(chatId,'구매 상품: '+product.name+' ('+product.credits+'P / '+Number(product.price_krw).toLocaleString('ko-KR')+'원)\\n입금할 분의 이름을 입력해 줘.\\n신청 접수 후 계좌 안내가 표시돼.\\n취소하려면 /취소');
+    return;
+  }
   if(cb?.data?.startsWith('imode:')){
     await tg('answerCallbackQuery',{callback_query_id:cb.id,text:'이제 편집만 지원해. 이미지를 다시 올려 줘.',show_alert:true});
     return;
@@ -349,8 +377,24 @@ async function handle(update,base,credits){
   const msg=update.message;
   if(!msg||msg.chat?.type!=='private')return;
   const chatId=msg.chat.id;
+  await credits.touch(msg.from.id,msg.from);
+  const userKey=String(msg.from.id);
+  if(msg.text?.trim()==='/취소'){purchasePending.delete(userKey);await send(chatId,'진행 중이던 구매 신청을 취소했어.');return;}
+  if(['/이용권구매','/구매','/shop'].includes(msg.text?.trim())){await showPhotoShop(chatId,commerce);return;}
+  const pendingBuy=purchasePending.get(userKey);
+  if(pendingBuy && msg.text && !msg.text.startsWith('/')){
+    if(Date.now()-pendingBuy.created>15*60*1000){purchasePending.delete(userKey);await send(chatId,'구매 입력 시간이 만료됐어. /이용권구매 로 다시 선택해 줘.');return;}
+    const depositor=msg.text.trim();
+    if(depositor.length<2||depositor.length>40){await send(chatId,'입금자명을 2~40자로 입력해 줘.');return;}
+    purchasePending.delete(userKey);
+    try{
+      const order=await commerce.order(userKey,pendingBuy.packageId,depositor);
+      await send(chatId,'✅ 구매 신청 접수 (#'+order.id+')\\n상품: '+order.name+'\\n지급 예정: '+order.credits+'P\\n입금 금액: '+Number(order.price_krw).toLocaleString('ko-KR')+'원\\n입금자명: '+depositor+'\\n\\n[입금 안내]\\n'+order.instructions+'\\n\\n관리자가 입금을 확인한 뒤 승인하면 포인트가 지급돼. 신청만으로 결제된 것은 아니야.');
+    }catch(e){await send(chatId,'구매 신청 실패: '+String(e.message).slice(0,200));}
+    return;
+  }
   if(msg.text==='/start'||msg.text==='/help'){
-    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꾸고 싶은 부분을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 체험·충전 잔여 횟수\n/내UID - 고유 UID 확인');
+    await send(chatId,'📸 포토샵봇\n이미지를 올리고 바꿀 내용을 말해 줘.\n예: 일식 > 한식\n\n/잔여횟수 - 이용권 및 포인트\n/이용권구매 - 상품 구매 신청\n/내UID - 고유 UID 확인');
     await sendBalance(chatId,msg.from.id,credits,'내 편집 이용권');
     return;
   }
@@ -369,9 +413,10 @@ async function handle(update,base,credits){
     sessions.set(chatId,{buf,created:Date.now(),mode:'edit'});
     pending.delete(String(msg.from.id));
     const balance=await credits.status(msg.from.id);
+    if(balance.is_blocked){sessions.delete(chatId);await send(chatId,'관리자가 사용을 제한한 계정이야.');return;}
     await send(chatId,balance.remaining>0
       ?'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\n🎫 잔여 편집 횟수: '+balance.remaining+'회'
-      :'이미지를 받았지만 이용 가능한 편집 횟수가 없어. /잔여횟수 로 확인해 줘.');
+      :'이미지를 받았지만 이용 가능한 편집 횟수가 없어. /이용권구매 로 구매할 수 있어.');
     return;
   }
   if(!msg.text)return;
@@ -409,7 +454,7 @@ async function handle(update,base,credits){
     return;
   }
   if(balance.remaining<1){
-    await send(chatId,'체험 횟수를 모두 사용했어. /잔여횟수 로 확인해 줘.');
+    await send(chatId,'편집 이용권이 부족해. /이용권구매 에서 추가 구매를 신청할 수 있어.');
     return;
   }
   const manualId=makeManualJob(chatId,saved.buf,changes[0],msg.from.id);
@@ -436,7 +481,7 @@ async function handle(update,base,credits){
     }
   }
 }
-export function mountImageBot(app,base,pool){
+export function mountImageBot(app,base,pool,commerce){
   const credits=createImageCredits(pool);
   if(!token){console.log('Image bot disabled (IMAGE_BOT_TOKEN absent)');return async()=>{};}
   const secret=crypto.createHash('sha256').update(token+':image-webhook').digest('hex');
@@ -554,13 +599,13 @@ export function mountImageBot(app,base,pool){
     if(recent.has(id))return res.sendStatus(200);
     recent.set(id,Date.now());
     res.sendStatus(200);
-    handle(req.body,base,credits).catch(async e=>{
+    handle(req.body,base,credits,commerce).catch(async e=>{
       console.error('image bot update failed:',e.message);
       const chatId=req.body?.message?.chat?.id;
       if(chatId)try{await send(chatId,'수정 실패: '+String(e.message).slice(0,200));}catch{}
     });
   });
-  const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,s] of manualJobs)if(Date.now()-s.created>ttl)manualJobs.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);},60000);
+  const sweep=setInterval(()=>{for(const [id,s] of sessions)if(Date.now()-s.created>ttl)sessions.delete(id);for(const [id,s] of pending)if(Date.now()-s.created>ttl)pending.delete(id);for(const [id,s] of manualJobs)if(Date.now()-s.created>ttl)manualJobs.delete(id);for(const [id,t] of recent)if(Date.now()-t>3600000)recent.delete(id);for(const [id,v] of purchasePending)if(Date.now()-v.created>15*60*1000)purchasePending.delete(id);},60000);
   sweep.unref();
   return async()=>{
     await credits.init();
