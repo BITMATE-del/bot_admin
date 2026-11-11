@@ -777,6 +777,7 @@ export function mountImageBot(app,base,pool,commerce){
     if(!job)return res.status(404).json({error:'Expired edit request'});
     if(['reserving','preparing','editing','verifying','sending'].includes(job.state))return res.status(202).json({state:job.state});
     if(job.state==='done')return res.json({state:'done'});
+    if(job.state==='interrupted'||job.state==='failed')return res.status(409).json({error:job.error||'이 작업은 다시 실행할 수 없어. 새 작업을 만들어 줘.'});
     if(String(req.body?.after||'')!==job.change.to)return res.status(400).json({error:'Unexpected replacement value'});
     const values=Object.fromEntries(['x','y','w','h','angle'].map(k=>[k,Number(req.body[k])]));
     if(!['x','y','w','h'].every(k=>Number.isInteger(values[k]))||!Number.isFinite(values.angle))return res.status(400).json({error:'Invalid edit selection'});
@@ -851,7 +852,7 @@ export function mountImageBot(app,base,pool,commerce){
     if(recent.has(id))return res.sendStatus(200);
     recent.set(id,Date.now());
     res.sendStatus(200);
-    handle(req.body,base,credits,commerce,adminMenu).catch(async e=>{
+    handle(req.body,base,credits,commerce,adminMenu,pool).catch(async e=>{
       console.error('image bot update failed:',e.message);
       const chatId=req.body?.message?.chat?.id;
       if(chatId)try{await send(chatId,'수정 실패: '+String(e.message).slice(0,200));}catch{}
