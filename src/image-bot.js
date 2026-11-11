@@ -45,6 +45,21 @@ const tg = async (method, data) => {
 };
 const send = (id,text) => tg('sendMessage',{chat_id:id,text});
 const guideImagePath=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public/photo-bot-guide.png');
+async function sendPurchaseGuidePhoto(chatId,buttons){
+ const imagePath=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public/photo-bot-payment-guide.png');
+ const png=await readFile(imagePath);
+ const metadata=await sharp(png).metadata();
+ if(metadata.format!=='png'||!metadata.width||!metadata.height)throw Error('충전 안내 이미지 PNG 형식이 올바르지 않아.');
+ const form=new FormData();
+ form.append('chat_id',String(chatId));
+ form.append('photo',new Blob([png],{type:'image/png'}),'photo-bot-payment-guide.png');
+ form.append('reply_markup',JSON.stringify({inline_keyboard:buttons}));
+ const response=await fetch('https://api.telegram.org/bot'+token+'/sendPhoto',{
+  method:'POST',body:form,signal:AbortSignal.timeout(45000)
+ });
+ const result=await response.json();
+ if(!result.ok)throw Error(result.description||'충전 안내 이미지 전송 실패');
+}
 async function sendGuidePhoto(chatId,buttons){
   const png=await readFile(guideImagePath);
   const dimensions=await sharp(png).metadata();
@@ -337,13 +352,20 @@ async function showPhotoShop(chatId,commerce){
   await send(chatId,'현재 이용권 구매 준비 중이야. 결제 지갑 설정이 완료되면 구매할 수 있어.');
   return;
  }
- await tg('sendMessage',{chat_id:chatId,
-  text:'🛍 이용권 구매하기\n\n이용권은 편집 성공 시 1매씩 차감돼.\n결제 가능: USDT(TRC20) 또는 TRON(TRX)\n\n상품 선택 → 결제 통화 선택 → 고유 입금 수량 안내 → TronGrid 자동 확인 → 이용권 자동 지급\n※ 안내된 정확한 입금 수량과 TRON 네트워크를 확인해 줘.',
-  reply_markup:{inline_keyboard:shop.packages.map(p=>[{
-   text:p.name+' · '+Number(p.price_usdt).toLocaleString('en-US')+' USDT',
-   callback_data:'shop:'+p.id
-  }])}
- });
+ const buttons=shop.packages.map(p=>[{
+  text:p.name+' · '+Number(p.price_usdt).toLocaleString('en-US')+' USDT',
+  callback_data:'shop:'+p.id
+ }]);
+ try{
+  await sendPurchaseGuidePhoto(chatId,buttons);
+ }catch(error){
+  // Preserve purchase access if the poster file is not yet in the repo.
+  console.warn('purchase guide image unavailable; sending original purchase menu:',error.message);
+  await tg('sendMessage',{chat_id:chatId,
+   text:'🎁 이용권 충전 안내\nUSDT(TRC20) 또는 TRON(TRX)으로 충전할 수 있어.\n상품 선택 후 발급된 주소에 정확한 수량을 입금하면 확정 거래 확인 후 자동으로 이용권이 지급돼.\n충전 완료 후 단순 변심에 따른 환불은 제한되며 관련 법령이 우선 적용돼.',
+   reply_markup:{inline_keyboard:buttons}
+  });
+ }
 }
 async function showFreePass(chatId,uid,credits){
  if(await credits.freePassClaimed(uid)){
