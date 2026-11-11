@@ -140,7 +140,7 @@ export function createPhotoAdminMenu(ops,tg,send){
     else if(action==='package'){
      const result=await ops.packages(actor);const p=result.packages.find(x=>String(x.id)===parts[2]);
      if(!p)throw Error('상품을 찾을 수 없습니다.');
-     await message(chat,'🏷 '+p.name+'\n이용권 '+p.credits+'회\n가격 '+fmt(p.price_krw)+'원\n판매 '+(p.active?'중':'중지'),[
+     await message(chat,'🏷 '+p.name+'\n이용권 '+p.credits+'매\n가격 '+fmt(p.price_usdt)+' USDT\n판매 +(p.active?'중':'중지'),[
        [{text:'✏️ 가격 변경',callback_data:'pa:price:'+p.id}],
        [{text:p.active?'판매 중지':'판매 허용',callback_data:'pa:togglepackage:'+p.id+':'+(p.active?'0':'1')}],
        [{text:'↩ 상품 목록',callback_data:'pa:products'}]
