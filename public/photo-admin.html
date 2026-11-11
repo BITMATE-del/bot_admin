@@ -35,7 +35,7 @@ table{border-collapse:collapse;width:100%;white-space:nowrap}th,td{padding:11px 
 <div><label>체험권 증감 (±회)</label><input id="trialDelta" type="number" value="1" min="-100000" max="100000"><button style="margin-top:7px" id="trialAdjust">체험권 적용</button></div>
 <div><label>포인트 증감 (1P = 편집 1회)</label><input id="pointDelta" type="number" value="10" min="-100000" max="100000"><button style="margin-top:7px" id="pointAdjust">포인트 적용</button></div>
 <div><label>회원 이용 제한</label><button style="margin-top:7px" class="danger" id="blockToggle">사용 정지</button><p class="small">정지하면 신규 편집을 시작할 수 없습니다.</p></div>
-</div><h2 style="margin-top:24px">최근 편집 사용 내역</h2><div class="scroller"><table><thead><tr><th>날짜</th><th>사용 유형</th><th>작업</th><th>처리 결과</th></tr></thead><tbody id="historyRows"></tbody></table></div></div>
+</div><h2 style="margin-top:24px">최근 편집 사용 내역</h2><div class="scroller"><table><thead><tr><th>날짜</th><th>사용 유형</th><th>작업</th><th>요청 내용</th><th>처리 결과</th></tr></thead><tbody id="historyRows"></tbody></table></div></div>
 </section>
 <section id="orders" class="section"><div class="card"><h2>구매 신청 · 수동 입금 확인</h2><p>실제 입금 여부를 별도로 확인한 뒤 승인하세요. 승인 시 지정 포인트가 자동 지급됩니다. 한 번 처리한 주문은 중복 승인되지 않습니다.</p><div class="row"><select id="orderFilter" style="max-width:220px"><option value="pending">처리 대기</option><option value="approved">승인 완료</option><option value="rejected">거절</option><option value="all">전체</option></select><button id="refreshOrders" class="secondary">조회</button></div>
 <div class="scroller"><table><thead><tr><th>신청 번호</th><th>UID</th><th>입금자명</th><th>상품</th><th>금액</th><th>포인트</th><th>상태</th><th>처리</th></tr></thead><tbody id="orderRows"></tbody></table></div></div></section>
@@ -88,7 +88,7 @@ async function detail(uid){
  $('blockToggle').textContent=selectedBlocked?'사용 정지 해제':'사용 정지';
  $('blockToggle').className=selectedBlocked?'secondary':'danger';
  clear('historyRows');for(const h of x.history){
-  const tr=document.createElement('tr');cell(tr,date(h.created_at));cell(tr,h.credit_type);cell(tr,h.source);cell(tr,h.state);$('historyRows').append(tr);
+  const tr=document.createElement('tr');cell(tr,date(h.created_at));cell(tr,h.credit_type);cell(tr,h.source);cell(tr,h.request_summary||'—');cell(tr,h.state);$('historyRows').append(tr);
  }
 }
 async function adjust(action,value){
