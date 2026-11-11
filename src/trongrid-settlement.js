@@ -1,5 +1,5 @@
 // Read-only TronGrid settlement: no wallet keys, signing or transfers.
-const WALLET='TDTw6GaL2GwjPY8JgY8fsk6hip5UAwcWDX';
+const WALLET=String(process.env.TRONGRID_WALLET_ADDRESS||'TDTw6GaL2GwjPY8JgY8fsk6hip5UAwcWDX');
 const USDT_CONTRACT='TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const API='https://api.trongrid.io';
 const key=()=>String(process.env.TRONGRID_API_KEY||'').trim();
