@@ -1,5 +1,6 @@
 import {createImageCredits,trialCredits} from './image-credits.js';
 import {createPhotoAdminOps} from './photo-admin-ops.js';
+const safeUid=value=>/^\d{1,19}$/.test(String(value||''))?String(value):null;
 
 export function mountPhotoAdmin(app,pool){
  const credits=createImageCredits(pool);
