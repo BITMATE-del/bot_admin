@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
 import { reviseDesignRegion, editWholeImage, interpretImageRequest } from './ai-image-design.js';
+import { replaceTextStrict } from './strict-text-replace.js';
 import { createImageCredits } from './image-credits.js';
 import { createPhotoAdminMenu } from './photo-admin-menu.js';
 
@@ -604,7 +605,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       if(![x,y,right,bottom].every(Number.isFinite)||right-x<4||bottom-y<4){
         throw new Error('자동 수정 영역이 원본 범위를 벗어났어. 브라우저에서 직접 선택해 줘.');
       }
-      const output=await reviseDesignRegion(job.buf,{x,y,w:right-x,h:bottom-y},'Edit the selected design region only. '+job.change.from+' to '+job.change.to+'. Preserve surrounding visual context.');
+      const output=await replaceTextStrict(job.buf,{x,y,w:right-x,h:bottom-y},job.change.from,job.change.to);
       await sendOriginalAndEdit(job.chatId,job.buf,output);
       await credits.consume(creditId);
       await sendBalance(job.chatId,cb.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
@@ -813,7 +814,7 @@ export function mountImageBot(app,base,pool,commerce){
     (async()=>{
       try{
         job.state='editing';
-        const output=await reviseDesignRegion(job.buf,values,job.instruction || ('Replace '+job.change.from+' with '+job.change.to+' naturally, matching existing font, texture, rotation, light and perspective.'));
+        const output=await replaceTextStrict(job.buf,values,job.change.from,job.change.to);
         job.state='verifying';
         await verifyOutputFile(job.buf,output);
         job.state='sending';
