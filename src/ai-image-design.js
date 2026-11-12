@@ -366,9 +366,10 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   // subtracted three times the squared mean and collapsed most variances
   // to zero, incorrectly flagging normal dark-themed text panels as black.
   const n=3*pixelCount;
-  const variance=Math.max(0,outputSq/n-(outputSum/n)**2);
+  let variance=Math.max(0,outputSq/n-(outputSum/n)**2);
   const sourceVariance=Math.max(0,sourceSq/n-(sourceSum/n)**2);
-  const darkFraction=outputDark/pixelCount,sourceDarkFraction=sourceDark/pixelCount;
+  let darkFraction=outputDark/pixelCount;
+  const sourceDarkFraction=sourceDark/pixelCount;
   console.info('image edit region quality',JSON.stringify({
     width:w,height:h,darkFraction:+darkFraction.toFixed(3),
     sourceDarkFraction:+sourceDarkFraction.toFixed(3),
@@ -377,10 +378,6 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   // A genuinely black generated patch is unusable when the original
   // region is visibly brighter. An already-dark background must not be
   // rejected solely for being dark; later glyph and change checks still run.
-  if(darkFraction>.94 && variance<75 &&
-     (sourceDarkFraction<.55 || sourceVariance>Math.max(500,variance*8))){
-    throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
-  }
   // A noisy, newly dark patch on a light UI is not a replacement label.
   // Retrying the same masked generation usually repeats the background fill.
   // Instead, retry once WITHOUT a mask, providing the original contextual
@@ -419,6 +416,8 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
       // alternate patch; do not accept a merely brighter patch as success.
       patch=repairedPatch;
       bytes.set(repairedPatch.data);
+      darkFraction=repairedStats.dark;
+      variance=repairedStats.variance;
       for(let py=0;py<h;py++)for(let px=0;px<w;px++){
         const border=Math.min(px,py,w-1-px,h-1-py);
         const opacity=fade ? Math.min(1,(border+0.5)/fade) : 1;
@@ -428,6 +427,10 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     }else{
       throw new Error('AI가 글자 대신 배경을 어둡게 변형해 잘못된 편집을 차단했어. 원본은 유지했어.');
     }
+  }
+  if(darkFraction>.94 && variance<75 &&
+     (sourceDarkFraction<.55 || sourceVariance>Math.max(500,variance*8))){
+    throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
   }
   const labelOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
     .ensureAlpha().raw().toBuffer();
