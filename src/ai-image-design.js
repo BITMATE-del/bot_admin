@@ -301,7 +301,9 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   let generated=await invoke(crop,instruction,mask);
   let patch=await extractPatch(generated);
   let firstStats=patchStats(patch);
+  let usedUnmaskedFallback=false;
   if(firstStats.dark>.94&&firstStats.variance<100){
+    usedUnmaskedFallback=true;
     console.warn('masked edit produced nearly solid black region; trying one unmasked contextual edit',
       JSON.stringify({width:w,height:h,dark:+firstStats.dark.toFixed(3),
         variance:Math.round(firstStats.variance)}));
@@ -385,7 +387,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   // is ever composited, so pixels outside it remain original.
   if(sourceDarkFraction<.20 && darkFraction>.60 &&
      darkFraction-sourceDarkFraction>.45){
-    if(attempt===0){
+    if(attempt===0&&!usedUnmaskedFallback){
       console.warn('image patch dark-fill: retrying unmasked context',JSON.stringify({
         width:w,height:h,darkFraction:+darkFraction.toFixed(3),
         sourceDarkFraction:+sourceDarkFraction.toFixed(3)
@@ -408,6 +410,9 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
         dark:+repairedStats.dark.toFixed(3),
         variance:Math.round(repairedStats.variance)
       }));
+      if(repairedStats.transparent>.05){
+        throw new Error('수정본에 비정상적인 투명 영역이 있어 전송을 차단했어. 원본은 유지했어.');
+      }
       if(repairedStats.dark>.60 &&
          repairedStats.dark-sourceDarkFraction>.45){
         throw new Error('AI가 글자 주변 배경을 어둡게 변형해 결과를 차단했어. 원본은 유지했어.');
