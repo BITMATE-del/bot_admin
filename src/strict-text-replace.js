@@ -6,6 +6,43 @@ import sharp from 'sharp';
 const FONTS=['Noto Serif CJK KR','Noto Sans CJK KR','DejaVu Sans'];
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const median=a=>{const v=a.sort((x,y)=>x-y);return v[Math.floor(v.length/2)]};
+// Recover repeatable diagonal/striped printing backgrounds from the
+// original border, without guessing arbitrary photographic textures.
+const backgroundModel=(pixels,w,h)=>{
+  const points=[];
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    if(x<3||y<3||x>=w-3||y>=h-3){
+      const k=(y*w+x)*4;
+      points.push({x,y,rgb:[pixels[k],pixels[k+1],pixels[k+2]]});
+    }
+  }
+  const constant=[0,1,2].map(ch=>median(points.map(p=>p.rgb[ch])));
+  const diff=(rgb,bg)=>Math.max(...rgb.map((v,j)=>Math.abs(v-bg[j])));
+  const noise=points.reduce((sum,p)=>sum+diff(p.rgb,constant),0)/points.length;
+  const flat={kind:'flat',error:noise,at:()=>constant};
+  if(noise<=8)return flat;
+  let best=null;
+  for(const [vx,vy] of [[1,1],[1,-1],[2,1],[2,-1],[1,2],[1,-2],[3,1],[3,-1],[1,3],[1,-3]]){
+    for(let period=4;period<=28;period++){
+      const samples=Array.from({length:period},()=>[[],[],[]]);
+      for(const p of points){
+        const phase=((vx*p.x+vy*p.y)%period+period)%period;
+        for(let ch=0;ch<3;ch++)samples[phase][ch].push(p.rgb[ch]);
+      }
+      if(samples.some(row=>row.some(arr=>arr.length<4)))continue;
+      const palette=samples.map(row=>row.map(arr=>median(arr)));
+      const error=points.reduce((sum,p)=>{
+        const phase=((vx*p.x+vy*p.y)%period+period)%period;
+        return sum+diff(p.rgb,palette[phase]);
+      },0)/points.length;
+      if(!best||error<best.error)best={kind:'periodic',error,vx,vy,period,
+        at:(x,y)=>palette[((vx*x+vy*y)%period+period)%period]};
+    }
+  }
+  // If the source is not a repeatable pattern, refuse to synthesize it.
+  if(!best||best.error>10||best.error>noise*.52)return null;
+  return best;
+};
 const bounds=(mask,w,h)=>{
   let left=w,top=h,right=-1,bottom=-1,n=0;
   for(let y=0;y<h;y++)for(let x=0;x<w;x++)if(mask[y*w+x]){
@@ -47,20 +84,19 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   if(!from||!to||from===to||from.length>60||to.length>60)
     throw new Error('기존 문구와 새 문구를 확인해 줘.');
   const region=await sharp(original).extract({left:x,top:y,width:w,height:h}).ensureAlpha().raw().toBuffer();
-  const perimeter=[];
-  for(let py=0;py<h;py++)for(let px=0;px<w;px++)if(px<2||px>=w-2||py<2||py>=h-2){
-    const k=(py*w+px)*4;perimeter.push([region[k],region[k+1],region[k+2]]);
-  }
-  const bg=[0,1,2].map(c=>median(perimeter.map(p=>p[c])));
-  const dist=(k,bytes)=>Math.max(...[0,1,2].map(c=>Math.abs(bytes[k+c]-bg[c])));
-  const edgeNoise=perimeter.reduce((sum,p)=>sum+Math.max(...p.map((v,c)=>Math.abs(v-bg[c]))),0)/perimeter.length;
-  if(edgeNoise>8)throw new Error('원본 배경에 무늬·질감이 있어 정확한 복원이 어려워. 원본 서체와 배경을 유지할 수 있는 자료가 필요해.');
-  const mask=new Uint8Array(w*h);let colors=[[],[],[]];
+  const model=backgroundModel(region,w,h);
+  if(!model)throw new Error('원본 배경 무늬를 정확하게 복원할 근거가 부족해. 다른 필체나 배경을 만들어 적용하지 않았어.');
+  const mask=new Uint8Array(w*h),soft=new Uint8Array(w*h);
+  let colors=[[],[],[]];
   for(let i=0;i<mask.length;i++){
-    const k=i*4,d=dist(k,region);
+    const x=i%w,y=Math.floor(i/w),k=i*4,ref=model.at(x,y);
+    const d=Math.max(...[0,1,2].map(ch=>Math.abs(region[k+ch]-ref[ch])));
+    // A background texture cannot be classified as dark ink merely because
+    // it differs from a global average; compare to the predicted local pixel.
+    soft[i]=d;
     if(d>=42){
       mask[i]=1;
-      if(d>65)for(let c=0;c<3;c++)colors[c].push(region[k+c]);
+      if(d>65)for(let ch=0;ch<3;ch++)colors[ch].push(region[k+ch]);
     }
   }
   const src=bounds(mask,w,h);
@@ -86,9 +122,17 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
     throw new Error('새 문구가 선택 영역을 벗어나거나 잘릴 수 있어. 원본을 유지했어.');
   // The selected rectangle's original flat background can be restored exactly
   // by its robust median RGB. No AI fill, typography hallucination or dark box.
-  const base=Buffer.alloc(w*h*4);
+  // Keep all measured background pixels untouched. Repair only source ink,
+  // using modeled repeating background when a texture is present.
+  const base=Buffer.from(region);
   for(let i=0;i<w*h;i++){
-    const k=i*4;for(let j=0;j<3;j++)base[k+j]=bg[j];base[k+3]=255;
+    const k=i*4;
+    if(soft[i]<12)continue;
+    const x=i%w,y=Math.floor(i/w),predicted=model.at(x,y);
+    const opacity=Math.max(0,Math.min(1,(soft[i]-12)/28));
+    for(let ch=0;ch<3;ch++)
+      base[k+ch]=Math.round(base[k+ch]*(1-opacity)+predicted[ch]*opacity);
+    base[k+3]=255;
   }
   const offsetX=Math.round((src.left+src.right-dest.left-dest.right)/2);
   const offsetY=Math.round((src.top+src.bottom-dest.top-dest.bottom)/2);
@@ -97,9 +141,10 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   for(let py=dest.top;py<=dest.bottom;py++)for(let px=dest.left;px<=dest.right;px++){
     const k=(py*w+px)*4,dx=px+offsetX,dy=py+offsetY,j=(dy*w+dx)*4;
     const a=newImage[k+3]/255;
-    for(let ch=0;ch<3;ch++)base[j+ch]=Math.round(ink[ch]*a+bg[ch]*(1-a));
+    const back=model.at(dx,dy);
+    for(let ch=0;ch<3;ch++)base[j+ch]=Math.round(ink[ch]*a+back[ch]*(1-a));
   }
   const patch=await sharp(base,{raw:{width:w,height:h,channels:4}}).png().toBuffer();
-  console.info('strict text replace matched source face',JSON.stringify({score:+best.score.toFixed(3),font:best.font,width:w,height:h}));
+  console.info('strict text replace matched source face',JSON.stringify({score:+best.score.toFixed(3),font:best.font,background:model.kind,backgroundError:+model.error.toFixed(2),width:w,height:h}));
   return sharp(original).composite([{input:patch,left:x,top:y}]).png().toBuffer();
 }
