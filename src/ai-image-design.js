@@ -28,6 +28,8 @@ const promptFor = instruction => [
   'For ordinary graphic design, prefer the visual conventions already shown in this image over default generated styles.',
   'Match neighboring shapes, local spacing, edge softness and graphic consistency. Avoid changing the original background or adding new design motifs.',
   'For short design labels, preserve the exact original visible glyph height, original baseline, font weight, text color, and its existing alignment. Do not enlarge, vertically scale, or change its font size when the new label is longer. Added digits may extend the line horizontally within the selected area, never increase letter height.',
+  'TYPEFACE IDENTITY IS CRITICAL for Korean handwriting, brush calligraphy, old printed lettering and serif fonts. Do NOT replace the original script with a clean modern sans-serif or generic Korean system font. Reproduce the source stroke vocabulary: thick-to-thin modulation, hairline strokes, sharp ink terminals, tapered ends, irregular hand-lettered contours, original ink texture and nonuniform character proportions. These details matter more than smoothness or modern legibility. Copy the visual writing style of the original glyphs even though the replacement characters differ.',
+  'For photographs and printed text over patterned, hatched or striped backgrounds, the background pattern must remain precisely in place. Preserve the source grain and hatching beneath and between new strokes; never paint a smooth rectangle, solid fill or blur to hide old glyphs.',
   'When editing a design label, preserve every character completely; do not truncate the first or last character. Keep the entire edited content comfortably inside the allowed area.',
   'Make the edited content visually consistent with the scene and the surrounding visual material.'
 ].join('\n');
@@ -231,6 +233,58 @@ function assessLabelConsistency(original,edited,w,h){
   if(b.top<2||b.bottom>=h-2){
     return '수정본 글자가 선택 영역 상하 여백을 침범해.';
   }
+  return null;
+}
+
+// High-confidence warning for dark calligraphic lettering over patterned
+// bright backgrounds. Unlike the flat-label detector, this ignores background
+// texture and measures solid near-black ink runs, looking for an obvious loss
+// of thick/thin variation. Different characters naturally change run lengths,
+// so only extreme departures can fail this heuristic.
+function assessTexturedInkStrokeContrast(original,edited,w,h){
+  if(w<55||h<24||original.length!==edited.length)return null;
+  const borderBrightness=[];
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++)
+    if(x<2||x>=w-2||y<2||y>=h-2){
+      const i=(y*w+x)*4;
+      borderBrightness.push((original[i]+original[i+1]+original[i+2])/3);
+    }
+  borderBrightness.sort((a,b)=>a-b);
+  if(borderBrightness[Math.floor(borderBrightness.length*.5)]<105)return null;
+  const inkRuns=(bytes)=>{
+    let count=0;
+    const mask=new Uint8Array(w*h);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=(y*w+x)*4;
+      const mx=Math.max(bytes[i],bytes[i+1],bytes[i+2]);
+      if(mx<80){mask[y*w+x]=1;count++;}
+    }
+    if(count<w*h*.035||count>w*h*.42)return null;
+    const horizontal=[],vertical=[];
+    for(let y=0;y<h;y++){
+      let run=0;
+      for(let x=0;x<=w;x++){
+        if(x<w&&mask[y*w+x])run++;
+        else if(run){if(run<=Math.min(20,h*.6))horizontal.push(run);run=0;}
+      }
+    }
+    for(let x=0;x<w;x++){
+      let run=0;
+      for(let y=0;y<=h;y++){
+        if(y<h&&mask[y*w+x])run++;
+        else if(run){if(run<=Math.min(20,h*.6))vertical.push(run);run=0;}
+      }
+    }
+    if(horizontal.length<70||vertical.length<70)return null;
+    const spread=a=>{a.sort((x,y)=>x-y);return a[Math.floor(a.length*.9)]/Math.max(1,a[Math.floor(a.length*.5)]);};
+    return {horizontal:spread(horizontal),vertical:spread(vertical)};
+  };
+  const a=inkRuns(original),b=inkRuns(edited);
+  if(!a||!b)return null;
+  const originalVaries=Math.max(a.horizontal,a.vertical);
+  const editedVaries=Math.max(b.horizontal,b.vertical);
+  if(originalVaries>=2.1&&editedVaries<=1.4&&editedVaries/originalVaries<.68)
+    return '원본의 붓글씨 획 굵기 대비가 수정본에서 사라졌어.';
   return null;
 }
 
@@ -686,6 +740,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     }
   }
   let mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
+  if(!mismatch)mismatch=assessTexturedInkStrokeContrast(labelOriginal,bytes,w,h);
   if(mismatch==='수정본 숫자 줄의 글자 높이가 원본과 달라.'){
     const corrected=await normalizeFlatLabelHeight(labelOriginal,bytes,w,h);
     if(corrected){
@@ -716,7 +771,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     if(attempt===0){
       console.warn('image label quality retry:',mismatch);
       return reviseDesignRegion(sourceBuffer,selection,
-        instruction+' CRITICAL IMAGE QA FAILURE: Keep the edited text at the SAME source font-size and visible glyph height (at most 1-2 pixels of raster difference), and the original line center X and center Y. Longer numbers may be wider, but NEVER taller, heavier or rescaled. If the line cannot fit, preserve glyph height and do not guess an enlarged replacement. Keep clear left/right padding, the original baseline, font weight, color and the unaffected lines. Never enlarge the number or shift its horizontal alignment.',1);
+        instruction+' ORIGINAL FONT FAILURE: Match the original Korean font family and stroke style exactly. If source is brush calligraphy, imitate variable brush strokes, serifs, ink taper, fine hairline strokes, uneven curves and original print noise. Never switch to generic clean sans-serif. Keep the background stripes or texture intact. CRITICAL IMAGE QA FAILURE: Keep the edited text at the SAME source font-size and visible glyph height (at most 1-2 pixels of raster difference), and the original line center X and center Y. Longer numbers may be wider, but NEVER taller, heavier or rescaled. If the line cannot fit, preserve glyph height and do not guess an enlarged replacement. Keep clear left/right padding, the original baseline, font weight, color and the unaffected lines. Never enlarge the number or shift its horizontal alignment.',1);
     }
     throw new Error('텍스트 스타일 검수 실패: '+mismatch+' 원본은 유지했어.');
   }
