@@ -234,6 +234,77 @@ function assessLabelConsistency(original,edited,w,h){
   return null;
 }
 
+// Correct a small glyph-height mismatch without asking the generative model to
+// redraw the typography. Only run on isolated lettering over a nearly flat
+// background; anything textured, clipped, too distorted or ambiguous fails
+// closed. This never changes pixels outside the user's selected rectangle.
+async function normalizeFlatLabelHeight(original,edited,w,h){
+  if(w<25||h<15||original.length!==edited.length)return null;
+  const median=values=>{values.sort((a,b)=>a-b);return values[Math.floor(values.length/2)];};
+  const border=bytes=>{
+    const samples=[];
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      if(x<2||y<2||x>=w-2||y>=h-2){
+        const i=(y*w+x)*4;samples.push([bytes[i],bytes[i+1],bytes[i+2]]);
+      }
+    }
+    const bg=[0,1,2].map(i=>median(samples.map(p=>p[i])));
+    const variation=samples.reduce((sum,p)=>sum+Math.max(...p.map((v,i)=>Math.abs(v-bg[i]))),0)/samples.length;
+    return {bg,variation};
+  };
+  const sourceBorder=border(original),editedBorder=border(edited);
+  if(sourceBorder.variation>9||editedBorder.variation>14)return null;
+  if(Math.max(...sourceBorder.bg.map((v,i)=>Math.abs(v-editedBorder.bg[i])))>20)return null;
+  const measure=(bytes,bg)=>{
+    let left=w,right=-1,top=h,bottom=-1,count=0;
+    const colors=[[],[],[]];
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const k=(y*w+x)*4;
+      const d=Math.max(Math.abs(bytes[k]-bg[0]),Math.abs(bytes[k+1]-bg[1]),Math.abs(bytes[k+2]-bg[2]));
+      if(d<32)continue;
+      left=Math.min(left,x);right=Math.max(right,x);
+      top=Math.min(top,y);bottom=Math.max(bottom,y);count++;
+      if(d>65)for(let channel=0;channel<3;channel++)colors[channel].push(bytes[k+channel]);
+    }
+    if(count<Math.max(12,w*h*.01)||count>w*h*.40||right<left||
+       top<2||bottom>=h-2||left<2||right>=w-2||
+       colors.some(array=>array.length<10))return null;
+    return {left,right,top,bottom,count,width:right-left+1,height:bottom-top+1,
+      cx:(left+right)/2,cy:(top+bottom)/2,
+      color:colors.map(values=>median(values))};
+  };
+  const a=measure(original,sourceBorder.bg),b=measure(edited,editedBorder.bg);
+  if(!a||!b||a.height<10)return null;
+  const delta=b.height-a.height;
+  const allowedExtra=Math.max(1,Math.floor(a.height*.04));
+  const allowedShrink=Math.max(2,Math.ceil(a.height*.05));
+  if(delta<=allowedExtra&&delta>=-allowedShrink)return null;
+  // Permit minor repair only. A significantly different font cannot safely
+  // be solved by stretching a different glyph.
+  const ratio=a.height/b.height;
+  if(ratio<.85||ratio>1.15)return null;
+  if(Math.abs(a.cx-b.cx)>Math.max(5,w*.04)||Math.abs(a.cy-b.cy)>Math.max(5,h*.12))return null;
+  const foregroundContrast=Math.max(...b.color.map((v,i)=>Math.abs(v-editedBorder.bg[i])));
+  if(foregroundContrast<45)return null;
+  const ink=Buffer.alloc(b.width*b.height*4);
+  for(let py=0;py<b.height;py++)for(let px=0;px<b.width;px++){
+    const i=((py+b.top)*w+(px+b.left))*4,k=(py*b.width+px)*4;
+    const d=Math.max(...b.color.map((v,j)=>Math.abs(edited[i+j]-editedBorder.bg[j])));
+    const intensity=Math.max(...[0,1,2].map(j=>Math.abs(edited[i+j]-editedBorder.bg[j])));
+    const opacity=Math.max(0,Math.min(255,Math.round(255*intensity/foregroundContrast)));
+    for(let channel=0;channel<3;channel++)ink[k+channel]=b.color[channel];
+    ink[k+3]=intensity<9?0:opacity;
+  }
+  const resized=await sharp(ink,{raw:{width:b.width,height:b.height,channels:4}})
+    .resize(b.width,a.height,{fit:'fill',kernel:'lanczos3'}).png().toBuffer();
+  const placeX=Math.round(a.cx-b.width/2),placeY=Math.round(a.cy-a.height/2);
+  if(placeX<2||placeY<2||placeX+b.width>w-2||placeY+a.height>h-2)return null;
+  const background=await sharp({create:{width:w,height:h,channels:4,
+    background:{r:sourceBorder.bg[0],g:sourceBorder.bg[1],b:sourceBorder.bg[2],alpha:1}}})
+    .composite([{input:resized,left:placeX,top:placeY}]).raw().toBuffer();
+  return background;
+}
+
 export async function reviseDesignRegion(sourceBuffer,selection,instruction,attempt=0) {
   const {upright,width:W,height:H} = await check(sourceBuffer);
   const {x,y,w,h} = selection;
@@ -483,7 +554,18 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
       throw new Error('수정한 글자가 선택 영역 오른쪽 경계에서 잘릴 위험이 있어. 원본을 유지했어. 다음 시도에서는 오른쪽 여백까지 더 넓게 선택해 줘.');
     }
   }
-  const mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
+  let mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
+  if(mismatch==='수정본 숫자 줄의 글자 높이가 원본과 달라.'){
+    const corrected=await normalizeFlatLabelHeight(labelOriginal,bytes,w,h);
+    if(corrected){
+      const afterCorrection=assessLabelConsistency(labelOriginal,corrected,w,h);
+      if(!afterCorrection){
+        bytes.set(corrected);
+        mismatch=null;
+        console.info('image label height normalized without AI redraw',JSON.stringify({width:w,height:h}));
+      }else console.info('image height correction rejected by QA',afterCorrection);
+    }
+  }
   if(mismatch){
     if(attempt===0){
       console.warn('image label quality retry:',mismatch);
