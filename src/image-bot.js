@@ -9,6 +9,24 @@ import { replaceTextStrict } from './strict-text-replace.js';
 import { createImageCredits } from './image-credits.js';
 import { createPhotoAdminMenu } from './photo-admin-menu.js';
 
+// Preserve the previously working contextual edit path for printed/striped
+// backgrounds. Strict font rendering is tried first, but its inability to
+// model a background must NOT prevent the user from editing as before.
+// Never swallow unrelated errors or silently use a different font on a flat
+// background. The older path retains its typography/placement QA.
+async function replaceSelectedText(buf,selection,from,to){
+  try{
+    return await replaceTextStrict(buf,selection,from,to);
+  }catch(error){
+    if(!String(error?.message||'').includes('원본 배경 무늬를 정확하게 복원할 근거가 부족해'))throw error;
+    console.info('strict background model unavailable; using previously working contextual editor',
+      JSON.stringify({width:selection.w,height:selection.h}));
+    return reviseDesignRegion(buf,selection,
+      'Replace ONLY the exact original text '+JSON.stringify(from)+
+      ' with '+JSON.stringify(to)+
+      '. Preserve the existing patterned background, print texture, original ink stroke contrast, font family, glyph height, baseline and horizontal center. Do not invent a new clean Korean font or redesign the image.');
+  }
+}
 const token = process.env.IMAGE_BOT_TOKEN;
 const editorOrigin = 'https://botadmin-production.up.railway.app';
 const editorUrl = jobId => editorOrigin + '/image-editor?job=' + encodeURIComponent(jobId) + '&v=20261109-7';
@@ -605,7 +623,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       if(![x,y,right,bottom].every(Number.isFinite)||right-x<4||bottom-y<4){
         throw new Error('자동 수정 영역이 원본 범위를 벗어났어. 브라우저에서 직접 선택해 줘.');
       }
-      const output=await replaceTextStrict(job.buf,{x,y,w:right-x,h:bottom-y},job.change.from,job.change.to);
+      const output=await replaceSelectedText(job.buf,{x,y,w:right-x,h:bottom-y},job.change.from,job.change.to);
       await sendOriginalAndEdit(job.chatId,job.buf,output);
       await credits.consume(creditId);
       await sendBalance(job.chatId,cb.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
@@ -814,7 +832,7 @@ export function mountImageBot(app,base,pool,commerce){
     (async()=>{
       try{
         job.state='editing';
-        const output=await replaceTextStrict(job.buf,values,job.change.from,job.change.to);
+        const output=await replaceSelectedText(job.buf,values,job.change.from,job.change.to);
         job.state='verifying';
         await verifyOutputFile(job.buf,output);
         job.state='sending';
