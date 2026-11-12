@@ -181,10 +181,19 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   // Keep all measured background pixels untouched. Repair only source ink,
   // using modeled repeating background when a texture is present.
   const base=Buffer.from(region);
+  // Restore only the old ink and its antialiased edge (2px radius), never a
+  // full rectangular panel. All other background pixels remain byte-identical
+  // to the upload, including tiny print grain and hatching imperfections.
+  const oldInkNeighborhood=new Uint8Array(w*h);
+  for(let py=0;py<h;py++)for(let px=0;px<w;px++)if(mask[py*w+px]){
+    for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+      const xx=px+dx,yy=py+dy;
+      if(xx>=0&&xx<w&&yy>=0&&yy<h)oldInkNeighborhood[yy*w+xx]=1;
+    }
+  }
   for(let i=0;i<w*h;i++){
-    const k=i*4;
-    if(soft[i]<12)continue;
-    const x=i%w,y=Math.floor(i/w),predicted=model.at(x,y);
+    if(!oldInkNeighborhood[i]||soft[i]<12)continue;
+    const k=i*4,x=i%w,y=Math.floor(i/w),predicted=model.at(x,y);
     const opacity=Math.max(0,Math.min(1,(soft[i]-12)/28));
     for(let ch=0;ch<3;ch++)
       base[k+ch]=Math.round(base[k+ch]*(1-opacity)+predicted[ch]*opacity);
