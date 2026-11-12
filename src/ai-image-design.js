@@ -362,6 +362,60 @@ function recoverColoredLabelFromDarkFill(source,generated,w,h){
   return out;
 }
 
+// For an isolated label on a flat background, move generated glyph pixels
+// back onto the ORIGINAL source text center rather than regenerating the image.
+// Reject textured, multicolor, oversized or clipped candidates.
+function alignFlatLabelCenter(original,generated,w,h){
+  if(w<25||h<15||original.length!==generated.length)return null;
+  const median=a=>{a.sort((x,y)=>x-y);return a[Math.floor(a.length/2)];};
+  const border=[];
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++)
+    if(x<2||x>=w-2||y<2||y>=h-2){
+      const k=(y*w+x)*4;border.push([original[k],original[k+1],original[k+2]]);
+    }
+  const bg=[0,1,2].map(j=>median(border.map(p=>p[j])));
+  const deviation=p=>Math.max(...p.map((v,j)=>Math.abs(v-bg[j])));
+  if(border.reduce((sum,p)=>sum+deviation(p),0)/border.length>9)return null;
+  const measure=bytes=>{
+    let left=w,right=-1,top=h,bottom=-1,count=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const k=(y*w+x)*4;
+      if(deviation([bytes[k],bytes[k+1],bytes[k+2]])<32)continue;
+      left=Math.min(left,x);right=Math.max(right,x);
+      top=Math.min(top,y);bottom=Math.max(bottom,y);count++;
+    }
+    if(count<Math.max(10,w*h*.012)||count>w*h*.4||left<2||
+       right>=w-2||top<2||bottom>=h-2)return null;
+    return {left,right,top,bottom,count,cx:(left+right)/2,cy:(top+bottom)/2};
+  };
+  const a=measure(original),b=measure(generated);
+  if(!a||!b)return null;
+  const dx=Math.round(a.cx-b.cx),dy=Math.round(a.cy-b.cy);
+  if(Math.abs(dx)>Math.max(7,Math.floor(w*.025))||
+     Math.abs(dy)>Math.max(7,Math.floor(h*.09))||
+     (!dx&&!dy))return null;
+  if(b.left+dx<2||b.right+dx>=w-2||b.top+dy<2||b.bottom+dy>=h-2)return null;
+  // Preserve original edge pixels. Only recolor pixels in the original text
+  // rectangle; retain candidate glyph RGB, antialiasing and stroke weight.
+  const out=Buffer.from(original);
+  const pad=3;
+  const left=Math.max(0,a.left-pad),right=Math.min(w-1,a.right+pad);
+  const top=Math.max(0,a.top-pad),bottom=Math.min(h-1,a.bottom+pad);
+  for(let y=top;y<=bottom;y++)for(let x=left;x<=right;x++){
+    const i=(y*w+x)*4;
+    if(deviation([original[i],original[i+1],original[i+2]])>=18)
+      for(let channel=0;channel<3;channel++)out[i+channel]=bg[channel];
+  }
+  for(let y=b.top;y<=b.bottom;y++)for(let x=b.left;x<=b.right;x++){
+    const k=(y*w+x)*4;
+    if(deviation([generated[k],generated[k+1],generated[k+2]])<12)continue;
+    const dest=((y+dy)*w+(x+dx))*4;
+    out[dest]=generated[k];out[dest+1]=generated[k+1];
+    out[dest+2]=generated[k+2];out[dest+3]=255;
+  }
+  return {data:out,dx,dy};
+}
+
 export async function reviseDesignRegion(sourceBuffer,selection,instruction,attempt=0) {
   const {upright,width:W,height:H} = await check(sourceBuffer);
   const {x,y,w,h} = selection;
@@ -641,6 +695,21 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
         mismatch=null;
         console.info('image label height normalized without AI redraw',JSON.stringify({width:w,height:h}));
       }else console.info('image height correction rejected by QA',afterCorrection);
+    }
+  }
+  if(mismatch==='수정본 숫자 줄의 세로 중심이 원본과 달라.' ||
+     mismatch==='수정본 숫자 줄의 가로 중앙 정렬이 원본과 달라.'){
+    const aligned=alignFlatLabelCenter(labelOriginal,bytes,w,h);
+    if(aligned){
+      const checked=assessLabelConsistency(labelOriginal,aligned.data,w,h);
+      if(!checked){
+        bytes.set(aligned.data);
+        mismatch=null;
+        console.info('image label center corrected without AI retry',
+          JSON.stringify({dx:aligned.dx,dy:aligned.dy,width:w,height:h}));
+      }else{
+        console.info('image label center correction rejected by QA',checked);
+      }
     }
   }
   if(mismatch){
