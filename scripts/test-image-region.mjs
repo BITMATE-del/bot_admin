@@ -138,11 +138,33 @@ try{
   assert.ok(strictChanged>20,'Strict render should modify text');
   const texturedSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" text-anchor="middle">박정현</text></svg>');
   const texturedSource=await sharp(texturedSvg).png().toBuffer();
+  const texturedEdited=await replaceTextStrict(texturedSource,strictRect,'박정현','바구리');
+  const texturedBefore=await sharp(texturedSource).ensureAlpha().raw().toBuffer();
+  const texturedAfter=await sharp(texturedEdited).ensureAlpha().raw().toBuffer();
+  let texturedChanged=0,backgroundPreserved=0;
+  for(let py=0;py<140;py++)for(let px=0;px<280;px++){
+    const i=(py*280+px)*4;
+    const changed=[0,1,2].some(ch=>texturedBefore[i+ch]!==texturedAfter[i+ch]);
+    const inside=px>=strictRect.x&&px<strictRect.x+strictRect.w&&py>=strictRect.y&&py<strictRect.y+strictRect.h;
+    if(changed){texturedChanged++;assert.ok(inside,'Patterned edit changed pixels outside selection');}
+    if(inside&&!changed)backgroundPreserved++;
+  }
+  assert.ok(texturedChanged>20,'Periodic pattern should permit editing');
+  assert.ok(backgroundPreserved>1000,'Original pattern pixels must remain untouched');
+  // Non-periodic texture is not inferable: avoid inventing a background.
+  const randomBg=Buffer.alloc(280*140*4);
+  let seed=1234567;
+  for(let k=0;k<280*140;k++){
+    seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+    const shade=130+seed%100;
+    randomBg[k*4]=shade;randomBg[k*4+1]=shade;randomBg[k*4+2]=shade;randomBg[k*4+3]=255;
+  }
+  const randomPattern=await sharp(randomBg,{raw:{width:280,height:140,channels:4}}).png().toBuffer();
   await assert.rejects(
-    ()=>replaceTextStrict(texturedSource,strictRect,'박정현','바구리'),
-    /배경|서체|구분/
+    ()=>replaceTextStrict(randomPattern,strictRect,'박정현','바구리'),
+    /배경|서체|구분|글자/
   );
-  assert.equal(strictApiCalls,0,'Textured rejection must not invoke AI');
+  assert.equal(strictApiCalls,0,'Strict replacement must never invoke AI');
   console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
