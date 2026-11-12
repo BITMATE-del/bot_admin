@@ -164,7 +164,9 @@ try{
         +Math.abs(expectedTextured[k+2]-texturedAfter[k+2]);
       pixelsCompared+=3;
     }
-  assert.ok(totalError/pixelsCompared<24,
+  const fidelityError=totalError/pixelsCompared;
+  console.info('strict patterned golden fidelity',JSON.stringify({meanRgbError:+fidelityError.toFixed(2)}));
+  assert.ok(fidelityError<24,
     'Patterned text output diverged excessively from direct matching-font rendering');
 
   assert.ok(backgroundPreserved>1000,'Original pattern pixels must remain untouched');
