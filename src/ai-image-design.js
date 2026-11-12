@@ -305,6 +305,55 @@ async function normalizeFlatLabelHeight(original,edited,w,h){
   return background;
 }
 
+// Only recover colored lettering from an erroneous dark AI fill on a nearly
+// uniform, light background. Never attempt this for dark source lettering,
+// textured panels, or when the glyph color cannot be separated with confidence.
+// The original background is used pixel-for-pixel; the AI cannot repaint it.
+function recoverColoredLabelFromDarkFill(source,generated,w,h){
+  if(w<28||h<16||source.length!==generated.length)return null;
+  const median=values=>{values.sort((a,b)=>a-b);return values[Math.floor(values.length>>1)];};
+  const border=[];
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    if(x<2||x>=w-2||y<2||y>=h-2){
+      const i=(y*w+x)*4;border.push([source[i],source[i+1],source[i+2]]);
+    }
+  }
+  const bg=[0,1,2].map(j=>median(border.map(p=>p[j])));
+  const difference=(a,b)=>Math.max(...a.map((v,j)=>Math.abs(v-b[j])));
+  const noise=border.reduce((sum,p)=>sum+difference(p,bg),0)/border.length;
+  if(noise>9||Math.min(...bg)<100)return null;
+  let originalInk=0;const colorSamples=[[],[],[]];
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const i=(y*w+x)*4,rgb=[source[i],source[i+1],source[i+2]];
+    if(difference(rgb,bg)<65)continue;
+    originalInk++;
+    for(let j=0;j<3;j++)colorSamples[j].push(rgb[j]);
+  }
+  if(originalInk<Math.max(12,w*h*.01)||originalInk>w*h*.38)return null;
+  const glyph=[0,1,2].map(j=>median(colorSamples[j]));
+  // A dark generated rectangle cannot be separated from black/dark glyphs.
+  // Only distinct mid-bright or vivid text is recoverable.
+  if(Math.max(...glyph)<90||difference(glyph,[15,15,15])<78)return null;
+  const out=Buffer.from(source);
+  let retained=0,minX=w,minY=h,maxX=-1,maxY=-1;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const i=(y*w+x)*4;
+    const candidate=[generated[i],generated[i+1],generated[i+2]];
+    // Keep only foreground-colored pixels that are clearly non-background;
+    // a dark AI fill is NEVER composited into the original source.
+    if(difference(candidate,glyph)>38||Math.max(...candidate)<65)continue;
+    retained++;minX=Math.min(minX,x);maxX=Math.max(maxX,x);
+    minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+    for(let j=0;j<3;j++)out[i+j]=candidate[j];
+    out[i+3]=255;
+  }
+  if(retained<originalInk*.48||retained>originalInk*2.0)return null;
+  if(minX<3||minY<3||maxX>=w-3||maxY>=h-3)return null;
+  // Require a meaningful amount of the generated text to be present.
+  if(maxX-minX+1<w*.12||maxY-minY+1<h*.15)return null;
+  return out;
+}
+
 export async function reviseDesignRegion(sourceBuffer,selection,instruction,attempt=0) {
   const {upright,width:W,height:H} = await check(sourceBuffer);
   const {x,y,w,h} = selection;
@@ -486,14 +535,26 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
       }
       if(repairedStats.dark>.60 &&
          repairedStats.dark-sourceDarkFraction>.45){
-        throw new Error('AI가 글자 주변 배경을 어둡게 변형해 결과를 차단했어. 원본은 유지했어.');
+        const extracted=recoverColoredLabelFromDarkFill(originalRegion,repairedPatch.data,w,h);
+        if(!extracted){
+          throw new Error('AI가 글자 주변 배경을 어둡게 변형해 결과를 차단했어. 원본은 유지했어.');
+        }
+        const extractedStats=patchStats({data:extracted});
+        // The extracted glyphs are subject to the SAME layout/typeface checks.
+        // Do not treat background restoration as a successful edit by itself.
+        patch=repairedPatch;
+        bytes.set(extracted);
+        darkFraction=extractedStats.dark;
+        variance=extractedStats.variance;
+        console.info('image dark-fill label extraction candidate',JSON.stringify({width:w,height:h}));
+      }else{
+        patch=repairedPatch;
+        bytes.set(repairedPatch.data);
+        darkFraction=repairedStats.dark;
+        variance=repairedStats.variance;
       }
       // Run every normal typography, boundary and source-pixel check on this
       // alternate patch; do not accept a merely brighter patch as success.
-      patch=repairedPatch;
-      bytes.set(repairedPatch.data);
-      darkFraction=repairedStats.dark;
-      variance=repairedStats.variance;
       for(let py=0;py<h;py++)for(let px=0;px<w;px++){
         const border=Math.min(px,py,w-1-px,h-1-py);
         const opacity=fade ? Math.min(1,(border+0.5)/fade) : 1;
@@ -501,9 +562,17 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
         bytes[alphaOffset]=Math.round(bytes[alphaOffset]*opacity);
       }
     }else{
-      if(darkFraction>.94 && variance<75)
-        throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
-      throw new Error('AI가 글자 대신 배경을 어둡게 변형해 잘못된 편집을 차단했어. 원본은 유지했어.');
+      const extracted=recoverColoredLabelFromDarkFill(originalRegion,bytes,w,h);
+      if(!extracted){
+        if(darkFraction>.94 && variance<75)
+          throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
+        throw new Error('AI가 글자 대신 배경을 어둡게 변형해 잘못된 편집을 차단했어. 원본은 유지했어.');
+      }
+      const extractedStats=patchStats({data:extracted});
+      bytes.set(extracted);
+      darkFraction=extractedStats.dark;
+      variance=extractedStats.variance;
+      console.info('image dark-fill source background restored',JSON.stringify({width:w,height:h}));
     }
   }
   if(darkFraction>.94 && variance<75 &&
