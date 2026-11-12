@@ -27,7 +27,7 @@ const promptFor = instruction => [
   'Retain all unrelated text, numbers, faces, objects, spacing and layout. Do not redesign or add decorative elements.',
   'For ordinary graphic design, prefer the visual conventions already shown in this image over default generated styles.',
   'Match neighboring shapes, local spacing, edge softness and graphic consistency. Avoid changing the original background or adding new design motifs.',
-  'For short design labels, keep the replacement on the same baseline and within the original glyph height, with the same perceived stroke weight, muted/bright text color, and left alignment. Do not recenter or enlarge the text.',
+  'For short design labels, preserve the exact original visible glyph height, original baseline, font weight, text color, and its existing alignment. Do not enlarge, vertically scale, or change its font size when the new label is longer. Added digits may extend the line horizontally within the selected area, never increase letter height.',
   'When editing a design label, preserve every character completely; do not truncate the first or last character. Keep the entire edited content comfortably inside the allowed area.',
   'Make the edited content visually consistent with the scene and the surrounding visual material.'
 ].join('\n');
@@ -205,7 +205,13 @@ function assessLabelConsistency(original,edited,w,h){
   // bounding-box measurements, NOT ink centroids (which shift with digits).
   // Only evaluate flat-background isolated text with measurable foreground.
   const heightRatio=b.height/a.height;
-  if(a.height>=8 && (heightRatio<.88||heightRatio>1.12)){
+  // Do not let newly generated numeric amounts look larger than the source.
+  // Allow just 1-2 raster pixels for antialiasing / digit-shape differences.
+  // For tiny labels keep a proportional fallback to avoid quantization noise.
+  const maxExtraHeight=a.height>=16 ? Math.max(1,Math.floor(a.height*.04)) : Math.max(1,Math.ceil(a.height*.08));
+  const maxShrinkHeight=a.height>=16 ? Math.max(2,Math.ceil(a.height*.05)) : Math.max(1,Math.ceil(a.height*.08));
+  if(a.height>=8 && (b.height>a.height+maxExtraHeight ||
+      b.height<a.height-maxShrinkHeight)){
     return '수정본 숫자 줄의 글자 높이가 원본과 달라.';
   }
   const centerToleranceX=Math.max(3,Math.min(10,w*.025));
@@ -440,7 +446,7 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     if(attempt===0){
       console.warn('image label quality retry:',mismatch);
       return reviseDesignRegion(sourceBuffer,selection,
-        instruction+' CRITICAL IMAGE QA FAILURE: Keep the edited text at exactly the original visible glyph height and the original line center X and center Y. Additional digits may make the line wider, but must not make its glyphs taller. Keep clear left/right padding, the original baseline, font weight, color and the unaffected lines. Never enlarge the number or shift its horizontal alignment.',1);
+        instruction+' CRITICAL IMAGE QA FAILURE: Keep the edited text at the SAME source font-size and visible glyph height (at most 1-2 pixels of raster difference), and the original line center X and center Y. Longer numbers may be wider, but NEVER taller, heavier or rescaled. If the line cannot fit, preserve glyph height and do not guess an enlarged replacement. Keep clear left/right padding, the original baseline, font weight, color and the unaffected lines. Never enlarge the number or shift its horizontal alignment.',1);
     }
     throw new Error('텍스트 스타일 검수 실패: '+mismatch+' 원본은 유지했어.');
   }
