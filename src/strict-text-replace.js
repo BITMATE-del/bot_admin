@@ -8,7 +8,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const median=a=>{const v=a.sort((x,y)=>x-y);return v[Math.floor(v.length/2)]};
 // Recover repeatable diagonal/striped printing backgrounds from the
 // original border, without guessing arbitrary photographic textures.
-const backgroundModel=(pixels,w,h)=>{
+const backgroundModel=(pixels,w,h,extraPoints=[])=>{
   const points=[];
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
     if(x<3||y<3||x>=w-3||y>=h-3){
@@ -16,6 +16,10 @@ const backgroundModel=(pixels,w,h)=>{
       points.push({x,y,rgb:[pixels[k],pixels[k+1],pixels[k+2]]});
     }
   }
+  // Neighboring unedited pixels provide evidence for repeating print textures,
+  // even when the selection's own border contains ink or a curved shadow.
+  // Coordinates remain relative to the edit rectangle.
+  if(extraPoints.length)points.push(...extraPoints);
   const constant=[0,1,2].map(ch=>median(points.map(p=>p.rgb[ch])));
   const diff=(rgb,bg)=>Math.max(...rgb.map((v,j)=>Math.abs(v-bg[j])));
   const noise=points.reduce((sum,p)=>sum+diff(p.rgb,constant),0)/points.length;
@@ -105,7 +109,38 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   if(!from||!to||from===to||from.length>60||to.length>60)
     throw new Error('기존 문구와 새 문구를 확인해 줘.');
   const region=await sharp(original).extract({left:x,top:y,width:w,height:h}).ensureAlpha().raw().toBuffer();
-  const model=backgroundModel(region,w,h);
+  let model=backgroundModel(region,w,h);
+  if(!model){
+    // Read-only context: pixels OUTSIDE the user-selected box are sampled to
+    // reconstruct the existing pattern, but will never be modified.
+    const margin=Math.max(10,Math.min(28,Math.round(Math.min(w,h)*.3)));
+    const left=Math.max(0,x-margin),top=Math.max(0,y-margin);
+    const right=Math.min(meta.width,x+w+margin),bottom=Math.min(meta.height,y+h+margin);
+    const contextW=right-left,contextH=bottom-top;
+    const context=await sharp(original).extract({left,top,width:contextW,height:contextH}).ensureAlpha().raw().toBuffer();
+    const extra=[];
+    for(let py=0;py<contextH;py+=2)for(let px=0;px<contextW;px+=2){
+      const globalX=px+left,globalY=py+top;
+      if(globalX>=x&&globalX<x+w&&globalY>=y&&globalY<y+h)continue;
+      const k=(py*contextW+px)*4;
+      extra.push({x:globalX-x,y:globalY-y,
+        rgb:[context[k],context[k+1],context[k+2]]});
+    }
+    const candidate=backgroundModel(region,w,h,extra);
+    if(candidate){
+      // Verify against the selection border as a held-out reference: if the
+      // external context follows a different panel/texture, reject it.
+      const samples=[];
+      for(let py=0;py<h;py++)for(let px=0;px<w;px++)
+        if(px<3||py<3||px>=w-3||py>=h-3){
+          const k=(py*w+px)*4,expected=candidate.at(px,py);
+          samples.push(Math.max(...[0,1,2].map(ch=>Math.abs(region[k+ch]-expected[ch]))));
+        }
+      samples.sort((a,b)=>a-b);
+      const med=samples[Math.floor(samples.length/2)];
+      if(med<=15)model=candidate;
+    }
+  }
   if(!model)throw new Error('원본 배경 무늬를 정확하게 복원할 근거가 부족해. 다른 필체나 배경을 만들어 적용하지 않았어.');
   const mask=new Uint8Array(w*h),soft=new Uint8Array(w*h);
   let colors=[[],[],[]];
