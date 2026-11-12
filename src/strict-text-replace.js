@@ -78,7 +78,7 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   }
   // Deliberately conservative: don't pretend a brush/printed face is a
   // generic Korean sans font. Exact font is otherwise unknowable from pixels.
-  if(!best||best.score<.68)
+  if(!best||best.score<.76)
     throw new Error('원본 글씨체와 일치하는 서체를 찾지 못했어. 다른 글꼴을 새로 만들어 적용하지 않았고 이용권도 차감하지 않아.');
   const newImage=await alpha(to,best.font,best.size,w,h);
   const newMask=outMask(newImage,w,h), dest=bounds(newMask,w,h);
