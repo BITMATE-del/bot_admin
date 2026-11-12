@@ -76,8 +76,8 @@ const bounds=(mask,w,h)=>{
   }
   return n?{left,top,right,bottom,w:right-left+1,h:bottom-top+1,n}:null;
 };
-const alpha=async(text,font,fontSize,w,h)=>{
-  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'"><text x="'+(w/2)+'" y="'+(h/2+fontSize*.34)+'" font-family="'+esc(font)+'" font-size="'+fontSize+'" text-anchor="middle" fill="#000">'+esc(text)+'</text></svg>';
+const alpha=async(text,font,fontSize,w,h,weight=400)=>{
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'"><text x="'+(w/2)+'" y="'+(h/2+fontSize*.34)+'" font-family="'+esc(font)+'" font-weight="'+weight+'" font-size="'+fontSize+'" text-anchor="middle" fill="#000">'+esc(text)+'</text></svg>';
   return sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer();
 };
 const outMask=(bytes,w,h)=>{const mask=new Uint8Array(w*h);for(let i=0;i<mask.length;i++)mask[i]=bytes[i*4+3]>110?1:0;return mask;};
@@ -161,18 +161,19 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
     throw new Error('기존 글자와 배경을 확실하게 구분할 수 없어. 원본은 유지했어.');
   const ink=colors.map(c=>median(c));
   let best=null;
-  for(const font of FONTS)for(const size of [Math.round(src.h*1.03),Math.round(src.h*1.15),Math.round(src.h*1.28),Math.round(src.h*1.42)]){
-    if(size<7)continue;
-    const rendered=await alpha(from,font,size,w,h);
-    const rm=outMask(rendered,w,h), rb=bounds(rm,w,h);
-    const score=compare(mask,src,rm,rb,w,h);
-    if(!best||score>best.score)best={font,size,score};
-  }
+  for(const font of FONTS)for(const weight of [400,700])
+    for(const size of [Math.round(src.h*1.03),Math.round(src.h*1.15),Math.round(src.h*1.28),Math.round(src.h*1.42)]){
+      if(size<7)continue;
+      const rendered=await alpha(from,font,size,w,h,weight);
+      const rm=outMask(rendered,w,h), rb=bounds(rm,w,h);
+      const score=compare(mask,src,rm,rb,w,h);
+      if(!best||score>best.score)best={font,size,weight,score};
+    }
   // Deliberately conservative: don't pretend a brush/printed face is a
   // generic Korean sans font. Exact font is otherwise unknowable from pixels.
   if(!best||best.score<.76)
     throw new Error('원본 글씨체와 일치하는 서체를 찾지 못했어. 다른 글꼴을 새로 만들어 적용하지 않았고 이용권도 차감하지 않아.');
-  const newImage=await alpha(to,best.font,best.size,w,h);
+  const newImage=await alpha(to,best.font,best.size,w,h,best.weight);
   const newMask=outMask(newImage,w,h), dest=bounds(newMask,w,h);
   if(!dest||dest.left<3||dest.top<3||dest.right>=w-3||dest.bottom>=h-3)
     throw new Error('새 문구가 선택 영역을 벗어나거나 잘릴 수 있어. 원본을 유지했어.');
@@ -210,6 +211,6 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
     for(let ch=0;ch<3;ch++)base[j+ch]=Math.round(ink[ch]*a+back[ch]*(1-a));
   }
   const patch=await sharp(base,{raw:{width:w,height:h,channels:4}}).png().toBuffer();
-  console.info('strict text replace matched source face',JSON.stringify({score:+best.score.toFixed(3),font:best.font,background:model.kind,backgroundError:+model.error.toFixed(2),width:w,height:h}));
+  console.info('strict text replace matched source face',JSON.stringify({score:+best.score.toFixed(3),font:best.font,weight:best.weight,background:model.kind,backgroundError:+model.error.toFixed(2),width:w,height:h}));
   return sharp(original).composite([{input:patch,left:x,top:y}]).png().toBuffer();
 }
