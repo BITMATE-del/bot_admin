@@ -137,8 +137,9 @@ try{
   }
   assert.ok(strictChanged>20,'Strict render should modify text');
   const texturedSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" text-anchor="middle">박정현</text></svg>');
+  const texturedSource=await sharp(texturedSvg).png().toBuffer();
   await assert.rejects(
-    ()=>replaceTextStrict(await sharp(texturedSvg).png().toBuffer(),strictRect,'박정현','바구리'),
+    ()=>replaceTextStrict(texturedSource,strictRect,'박정현','바구리'),
     /배경|서체|구분/
   );
   assert.equal(strictApiCalls,0,'Textured rejection must not invoke AI');
