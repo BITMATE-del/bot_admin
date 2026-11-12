@@ -116,7 +116,33 @@ try{
     /텍스트 스타일 검수 실패|오른쪽 경계/
   );
   assert.ok(qualityCalls>=1&&qualityCalls<=2,'Bad output must be rejected with at most one quality retry');
-  console.log('PASS: boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
+  // Strict text replacement must NEVER use the image-generation endpoint.
+  // A plain original rendered in an available face should match its source.
+  const {replaceTextStrict}=await import('../src/strict-text-replace.js');
+  const strictSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><rect width="280" height="140" fill="#ffffff"/><text x="140" y="76" font-family="Noto Serif CJK KR" font-size="38" fill="#191919" text-anchor="middle">박정현</text></svg>');
+  const strictSource=await sharp(strictSvg).png().toBuffer();
+  let strictApiCalls=0;
+  globalThis.fetch=async()=>{strictApiCalls++;throw new Error('Unexpected AI image request');};
+  const strictRect={x:20,y:32,w:240,h:60};
+  const strictEdited=await replaceTextStrict(strictSource,strictRect,'박정현','바구리');
+  assert.equal(strictApiCalls,0,'Strict text replacement must not invoke AI');
+  const strictBefore=await sharp(strictSource).ensureAlpha().raw().toBuffer();
+  const strictAfter=await sharp(strictEdited).ensureAlpha().raw().toBuffer();
+  let strictChanged=0;
+  for(let py=0;py<140;py++)for(let px=0;px<280;px++){
+    const k=(py*280+px)*4;
+    const changed=[0,1,2].some(ch=>strictBefore[k+ch]!==strictAfter[k+ch]);
+    const inside=px>=strictRect.x&&px<strictRect.x+strictRect.w&&py>=strictRect.y&&py<strictRect.y+strictRect.h;
+    if(changed){strictChanged++;assert.ok(inside,'Strict renderer changed an outside pixel');}
+  }
+  assert.ok(strictChanged>20,'Strict render should modify text');
+  const texturedSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" text-anchor="middle">박정현</text></svg>');
+  await assert.rejects(
+    ()=>replaceTextStrict(await sharp(texturedSvg).png().toBuffer(),strictRect,'박정현','바구리'),
+    /배경|서체|구분/
+  );
+  assert.equal(strictApiCalls,0,'Textured rejection must not invoke AI');
+  console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
 }
