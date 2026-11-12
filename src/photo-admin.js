@@ -16,6 +16,14 @@ export function mountPhotoAdmin(app,pool){
   if(!resp.ok)throw Error('Telegram notify HTTP '+resp.status);
  });
  const ensure=async(uid)=>pool.query('INSERT INTO image_credit_accounts(uid,trial_total) VALUES($1,$2) ON CONFLICT(uid) DO NOTHING',[uid,trialCredits]);
+ // Checkout must create the credit account in its OWN transaction; using an
+ // undefined helper previously rejected every USDT/TRX purchase before an
+ // order or payment address could be issued.
+ const ensureTx=async(client,uid)=>{
+  const valid=safeUid(uid);
+  if(!valid)throw Error('UID가 올바르지 않습니다.');
+  await client.query('INSERT INTO image_credit_accounts(uid,trial_total) VALUES($1,$2) ON CONFLICT(uid) DO NOTHING',[valid,trialCredits]);
+ };
  async function init(){
   await credits.init();
   await telegramAdmin.init();
