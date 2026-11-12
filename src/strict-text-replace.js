@@ -39,9 +39,30 @@ const backgroundModel=(pixels,w,h)=>{
         at:(x,y)=>palette[((vx*x+vy*y)%period+period)%period]};
     }
   }
-  // If the source is not a repeatable pattern, refuse to synthesize it.
-  if(!best||best.error>10||best.error>noise*.52)return null;
-  return best;
+  // Backgrounds can contain a gentle light gradient or JPEG-compressed
+  // diagonal stripes. Judge a repeatable model against a baseline and permit
+  // small compression error; arbitrary photographic noise still fails.
+  const cx=(w-1)/2,cy=(h-1)/2;
+  const gradient=[0,1,2].map(ch=>{
+    const a=points.reduce((sum,p)=>sum+(p.x-cx)*(p.rgb[ch]-constant[ch]),0);
+    const b=points.reduce((sum,p)=>sum+(p.y-cy)*(p.rgb[ch]-constant[ch]),0);
+    const xx=points.reduce((sum,p)=>sum+(p.x-cx)**2,0);
+    const yy=points.reduce((sum,p)=>sum+(p.y-cy)**2,0);
+    return {center:constant[ch],slopeX:a/Math.max(1,xx),slopeY:b/Math.max(1,yy)};
+  });
+  const planarAt=(x,y)=>gradient.map(p=>Math.max(0,Math.min(255,Math.round(
+    p.center+p.slopeX*(x-cx)+p.slopeY*(y-cy)
+  ))));
+  const planarError=points.reduce((sum,p)=>sum+diff(p.rgb,planarAt(p.x,p.y)),0)/points.length;
+  const planar={kind:'gradient',error:planarError,at:planarAt};
+  if(planarError<=Math.min(11,noise*.52))return planar;
+  if(best&&best.error<=Math.min(15,noise*.68))return best;
+  console.info('strict background model inconclusive',JSON.stringify({
+    width:w,height:h,noise:+noise.toFixed(2),
+    periodicError:best?+best.error.toFixed(2):null,
+    gradientError:+planarError.toFixed(2)
+  }));
+  return null;
 };
 const bounds=(mask,w,h)=>{
   let left=w,top=h,right=-1,bottom=-1,n=0;
