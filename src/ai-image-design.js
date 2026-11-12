@@ -381,21 +381,53 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
      (sourceDarkFraction<.55 || sourceVariance>Math.max(500,variance*8))){
     throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
   }
-  // A large, newly dark rectangle is usually an AI fill artifact, not text.
-  // The previous flat-black check missed noisy dark patches (e.g. 82% dark,
-  // high variance). Retry once using explicit background conservation, then
-  // reject without charging if the regenerated patch is still corrupted.
+  // A noisy, newly dark patch on a light UI is not a replacement label.
+  // Retrying the same masked generation usually repeats the background fill.
+  // Instead, retry once WITHOUT a mask, providing the original contextual
+  // image with a precise target rectangle. Only the chosen source rectangle
+  // is ever composited, so pixels outside it remain original.
   if(sourceDarkFraction<.20 && darkFraction>.60 &&
      darkFraction-sourceDarkFraction>.45){
     if(attempt===0){
-      console.warn('image patch dark-fill retry',JSON.stringify({
+      console.warn('image patch dark-fill: retrying unmasked context',JSON.stringify({
         width:w,height:h,darkFraction:+darkFraction.toFixed(3),
         sourceDarkFraction:+sourceDarkFraction.toFixed(3)
       }));
-      return reviseDesignRegion(sourceBuffer,selection,
-        instruction+' URGENT: Do not darken, shade, fill, or repaint the surrounding background. Preserve the original background pixels and the original text color. Replace only the specified characters without a rectangular dark region.',1);
+      const px=Math.round(maskX/1024*100),py=Math.round(maskY/1024*100);
+      const pw=Math.max(1,Math.round(maskW/1024*100));
+      const ph=Math.max(1,Math.round(maskH/1024*100));
+      const repairInstruction=instruction+
+        ' EDIT ONLY THE ORIGINAL TEXT at position '+px+'% left, '+py+
+        '% top, width '+pw+'%, height '+ph+
+        '% of this contextual image. This is a LIGHT background UI label. '+
+        'Keep the white/light background completely unchanged, no dark box, '+
+        'no dark shadow, no panel redraw, no change to other lines. '+
+        'Keep the original text RGB color, font height, weight, baseline, '+
+        'and original horizontal center. Make the smallest possible glyph edit.';
+      const repaired=await invoke(crop,repairInstruction,null);
+      const repairedPatch=await extractPatch(repaired);
+      const repairedStats=patchStats(repairedPatch);
+      console.info('image dark-fill unmasked repair quality',JSON.stringify({
+        dark:+repairedStats.dark.toFixed(3),
+        variance:Math.round(repairedStats.variance)
+      }));
+      if(repairedStats.dark>.60 &&
+         repairedStats.dark-sourceDarkFraction>.45){
+        throw new Error('AI가 글자 주변 배경을 어둡게 변형해 결과를 차단했어. 원본은 유지했어.');
+      }
+      // Run every normal typography, boundary and source-pixel check on this
+      // alternate patch; do not accept a merely brighter patch as success.
+      patch=repairedPatch;
+      bytes.set(repairedPatch.data);
+      for(let py=0;py<h;py++)for(let px=0;px<w;px++){
+        const border=Math.min(px,py,w-1-px,h-1-py);
+        const opacity=fade ? Math.min(1,(border+0.5)/fade) : 1;
+        const alphaOffset=(py*w+px)*channels+3;
+        bytes[alphaOffset]=Math.round(bytes[alphaOffset]*opacity);
+      }
+    }else{
+      throw new Error('AI가 글자 대신 배경을 어둡게 변형해 잘못된 편집을 차단했어. 원본은 유지했어.');
     }
-    throw new Error('AI가 글자 대신 배경을 어둡게 변형해 잘못된 편집을 차단했어. 원본은 유지했어.');
   }
   const labelOriginal=await sharp(upright).extract({left:x,top:y,width:w,height:h})
     .ensureAlpha().raw().toBuffer();
