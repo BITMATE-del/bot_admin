@@ -334,7 +334,15 @@ function recoverColoredLabelFromDarkFill(source,generated,w,h){
   // A dark generated rectangle cannot be separated from black/dark glyphs.
   // Only distinct mid-bright or vivid text is recoverable.
   if(Math.max(...glyph)<90||difference(glyph,[15,15,15])<78)return null;
-  const out=Buffer.from(source);
+  // Erase the OLD label before composing the candidate characters. Keeping
+  // source pixels underneath would ghost both amounts into the result.
+  const out=Buffer.alloc(source.length);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const i=(y*w+x)*4;
+    const existing=[source[i],source[i+1],source[i+2]];
+    for(let j=0;j<3;j++)out[i+j]=difference(existing,bg)<18?existing[j]:bg[j];
+    out[i+3]=255;
+  }
   let retained=0,minX=w,minY=h,maxX=-1,maxY=-1;
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
     const i=(y*w+x)*4;
