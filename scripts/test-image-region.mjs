@@ -150,6 +150,23 @@ try{
     if(inside&&!changed)backgroundPreserved++;
   }
   assert.ok(texturedChanged>20,'Periodic pattern should permit editing');
+  // Golden reference: replacing a line on a repeating print texture must
+  // resemble direct rendering of the SAME target face over a clean pattern.
+  // This catches rectangular texture damage or conspicuous baseline drift.
+  const expectedPattern=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" font-family="Noto Sans CJK KR" text-anchor="middle">바구리</text></svg>');
+  const expectedTextured=await sharp(expectedPattern).ensureAlpha().raw().toBuffer();
+  let pixelsCompared=0,totalError=0;
+  for(let py=strictRect.y;py<strictRect.y+strictRect.h;py++)
+    for(let px=strictRect.x;px<strictRect.x+strictRect.w;px++){
+      const k=(py*280+px)*4;
+      totalError+=Math.abs(expectedTextured[k]-texturedAfter[k])
+        +Math.abs(expectedTextured[k+1]-texturedAfter[k+1])
+        +Math.abs(expectedTextured[k+2]-texturedAfter[k+2]);
+      pixelsCompared+=3;
+    }
+  assert.ok(totalError/pixelsCompared<24,
+    'Patterned text output diverged excessively from direct matching-font rendering');
+
   assert.ok(backgroundPreserved>1000,'Original pattern pixels must remain untouched');
   // Non-periodic texture is not inferable: avoid inventing a background.
   const randomBg=Buffer.alloc(280*140*4);
