@@ -430,6 +430,8 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
         bytes[alphaOffset]=Math.round(bytes[alphaOffset]*opacity);
       }
     }else{
+      if(darkFraction>.94 && variance<75)
+        throw new Error('AI 결과가 기존 글자와 배경을 검은색으로 지워 편집을 적용하지 않았어. 원본은 유지했어.');
       throw new Error('AI가 글자 대신 배경을 어둡게 변형해 잘못된 편집을 차단했어. 원본은 유지했어.');
     }
   }
