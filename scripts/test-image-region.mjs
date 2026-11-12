@@ -166,7 +166,7 @@ try{
     }
   const fidelityError=totalError/pixelsCompared;
   console.info('strict patterned golden fidelity',JSON.stringify({meanRgbError:+fidelityError.toFixed(2)}));
-  assert.ok(fidelityError<24,
+  assert.ok(fidelityError<12,
     'Patterned text output diverged excessively from direct matching-font rendering');
 
   assert.ok(backgroundPreserved>1000,'Original pattern pixels must remain untouched');
