@@ -467,11 +467,13 @@ try{
     row.some(b=>b.callback_data==='pa:page:1')),
     'First member page must contain next-page navigation');
   await press('pa:page:1');
-  assert.match(notices.at(-1).text,/2 \/ 1500페이지/,
+  assert.ok(notices.at(-1).reply_markup.inline_keyboard.some(row=>
+    row.some(b=>b.text==='2 / 1500페이지')),
     'Member pagination must retain the requested page');
   await press('pa:user:1000008');
   await press('pa:backusers');
-  assert.match(notices.at(-1).text,/2 \/ 1500페이지/,
+  assert.ok(notices.at(-1).reply_markup.inline_keyboard.some(row=>
+    row.some(b=>b.text==='2 / 1500페이지')),
     'Returning from member detail must retain prior page');
   await press('pa:find');
   assert.match(notices.at(-1).text,/검색할 UID/,
