@@ -769,7 +769,17 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     }
   }
   let mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
-  if(!mismatch)mismatch=assessTexturedInkStrokeContrast(labelOriginal,bytes,w,h);
+  // Stroke-contrast and perimeter statistics cannot establish identical
+  // typeface when the WORDS themselves differ. They previously triggered an
+  // expensive AI retry even for an otherwise usable, correctly composited
+  // first result; the retry frequently destroyed the good background and
+  // produced a second failure. Treat the typography heuristic as diagnostic
+  // only. Actual background, clipping, size, alignment and color safeguards
+  // remain blocking and the original composite path stays unchanged.
+  const typographyWarning=assessTexturedInkStrokeContrast(labelOriginal,bytes,w,h);
+  if(typographyWarning)console.warn('image typography similarity advisory (nonblocking)',JSON.stringify({
+    reason:typographyWarning,width:w,height:h,attempt
+  }));
   if(mismatch==='수정본 숫자 줄의 글자 높이가 원본과 달라.'){
     const corrected=await normalizeFlatLabelHeight(labelOriginal,bytes,w,h);
     if(corrected){
