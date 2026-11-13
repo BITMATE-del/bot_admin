@@ -49,7 +49,10 @@ export async function isolateKoreanNameSelection(sourceBuffer,selection,from,to)
     left=Math.min(left,px);right=Math.max(right,px);
   }
   const glyphH=bottom-top+1;
-  if(glyphH<10||glyphH>h*.85||left<2||right>=w-2)return selection;
+  // The selected box often ends ON the closing parenthesis. That is a
+  // reason to protect the suffix, not a reason to abandon name isolation.
+  // A touching rightmost suffix is still measurable via the name/suffix gap.
+  if(glyphH<10||glyphH>h*.85||left<2)return selection;
   const nominal=left+Array.from(from).length*glyphH*.98;
   // A distinct suffix should remain substantially to the right of the
   // expected name boundary. Find an ink-free gap close to that boundary.
