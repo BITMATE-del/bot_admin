@@ -175,6 +175,13 @@ export function createPhotoAdminOps(pool){
    await c.query('COMMIT');
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
+ // Eligible review targets are current Telegram bot admins, not arbitrary
+ // chats supplied by users. Revocation takes effect on the next delivery.
+ async function imageReviewRecipients(){
+  const result=await pool.query('SELECT uid::text FROM image_bot_admins ORDER BY created_at LIMIT 100');
+  return [...new Set([...owners(),...result.rows.map(row=>row.uid)])]
+    .filter(uid=>safeUid(uid)).slice(0,100);
+ }
  async function admins(actor){
   await assertAdmin(actor);
   const r=await pool.query('SELECT uid::text,granted_by::text,created_at FROM image_bot_admins ORDER BY created_at');
@@ -199,5 +206,5 @@ export function createPhotoAdminOps(pool){
   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }
  return {init,isAdmin,isOwner,overview,users,user,adjust,block,orders,decide,packages,
-  changePackage,settings,paymentSettings,admins,grant,revoke};
+  changePackage,settings,paymentSettings,admins,imageReviewRecipients,grant,revoke};
 }
