@@ -182,24 +182,31 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   // Keep all measured background pixels untouched. Repair only source ink,
   // using modeled repeating background when a texture is present.
   const base=Buffer.from(region);
-  // Restore only the old ink and its antialiased edge (2px radius), never a
-  // full rectangular panel. All other background pixels remain byte-identical
-  // to the upload, including tiny print grain and hatching imperfections.
+  // Remove faint remnants of the OLD glyph before compositing the new glyph.
+  // Crucially, do not paint every differing pixel: repeating hatching, grain,
+  // shadows and compression noise must remain intact. Restrict restoration to
+  // a 3px neighborhood of confidently detected old ink, including antialiasing
+  // at the top of letters. Do not expand the text bounding rectangle.
   const oldInkNeighborhood=new Uint8Array(w*h);
   for(let py=0;py<h;py++)for(let px=0;px<w;px++)if(mask[py*w+px]){
-    for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+    for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){
       const xx=px+dx,yy=py+dy;
       if(xx>=0&&xx<w&&yy>=0&&yy<h)oldInkNeighborhood[yy*w+xx]=1;
     }
   }
+  let restored=0;
   for(let i=0;i<w*h;i++){
-    if(!oldInkNeighborhood[i]||soft[i]<12)continue;
+    if(!oldInkNeighborhood[i]||soft[i]<10)continue;
     const k=i*4,x=i%w,y=Math.floor(i/w),predicted=model.at(x,y);
-    const opacity=Math.max(0,Math.min(1,(soft[i]-12)/28));
+    // At >26 RGB difference we replace confident old-ink remnants; for a
+    // 10..26 antialiased edge gradually blend into the unchanged pattern.
+    const opacity=Math.max(0,Math.min(1,(soft[i]-10)/16));
     for(let ch=0;ch<3;ch++)
       base[k+ch]=Math.round(base[k+ch]*(1-opacity)+predicted[ch]*opacity);
     base[k+3]=255;
+    restored++;
   }
+  console.info('strict text faint-ink cleanup',JSON.stringify({width:w,height:h,restored}));
   const offsetX=Math.round((src.left+src.right-dest.left-dest.right)/2);
   const offsetY=Math.round((src.top+src.bottom-dest.top-dest.bottom)/2);
   if(dest.left+offsetX<3||dest.right+offsetX>=w-3||dest.top+offsetY<3||dest.bottom+offsetY>=h-3)
