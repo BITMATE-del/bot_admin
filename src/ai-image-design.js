@@ -285,6 +285,35 @@ function assessTexturedInkStrokeContrast(original,edited,w,h){
   const editedVaries=Math.max(b.horizontal,b.vertical);
   if(originalVaries>=2.1&&editedVaries<=1.4&&editedVaries/originalVaries<.68)
     return '원본의 붓글씨 획 굵기 대비가 수정본에서 사라졌어.';
+  // Distinctive old-print / brush lettering has complex serif terminals.
+  // Measuring dark ink perimeter per dark pixel catches a replacement that
+  // becomes mechanically smooth and monoline, even if its average stroke
+  // thickness and background remain correct. Analyze ONLY pixels of dark
+  // lettering; do not alter or reconstruct a single background pixel.
+  const edgeComplexity=bytes=>{
+    const ink=new Uint8Array(w*h);
+    let painted=0,edges=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=(y*w+x)*4;
+      if(Math.max(bytes[i],bytes[i+1],bytes[i+2])<90){
+        ink[y*w+x]=1;painted++;
+      }
+    }
+    if(painted<Math.max(600,w*h*.045)||painted>w*h*.45)return null;
+    for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+      const idx=y*w+x;
+      edges+=(ink[idx]!==ink[idx+1])+(ink[idx]!==ink[idx+w]);
+    }
+    return {complexity:edges/painted,painted};
+  };
+  const before=edgeComplexity(original),after=edgeComplexity(edited);
+  if(before&&after&&before.complexity>.42&&
+     after.complexity<before.complexity*.86){
+    console.warn('image lettering edge-complexity mismatch',JSON.stringify({
+      before:+before.complexity.toFixed(3),after:+after.complexity.toFixed(3)
+    }));
+    return '수정본 글꼴의 획 끝과 세부 윤곽이 원본보다 단순해. 원본 필체와 달라.';
+  }
   return null;
 }
 
