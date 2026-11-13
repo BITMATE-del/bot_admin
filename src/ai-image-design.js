@@ -103,7 +103,7 @@ export async function editWholeImage(sourceBuffer,instruction) {
 // Conservative comparison for short labels on near-flat backgrounds.
 // On photographs or textured regions this intentionally returns null rather
 // than guessing whether two different strings share the same typography.
-function assessLabelConsistency(original,edited,w,h){
+export function assessLabelConsistency(original,edited,w,h){
   if(w<8||h<8||original.length!==edited.length)return null;
   const n=w*h, border=[];
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
@@ -224,6 +224,12 @@ function assessLabelConsistency(original,edited,w,h){
   }
   if(Math.abs(a.centerY-b.centerY)>centerToleranceY){
     return '수정본 숫자 줄의 세로 중심이 원본과 달라.';
+  }
+  // A displaced line can share nearly the same height and center while
+  // extending too far above/below the original. Treat both raster edges as
+  // independent QA constraints; never accept a visually oversized output.
+  if(a.height>=12 && (Math.abs(a.top-b.top)>2 || Math.abs(a.bottom-b.bottom)>2)){
+    return '수정본 글자의 위아래 경계가 원본 줄과 달라.';
   }
   // Allow extra digits to increase line width, but never clip against the
   // selected rectangle. At least a few actual background pixels must remain.
