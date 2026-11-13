@@ -1,9 +1,26 @@
 import sharp from 'sharp';
+import {readFileSync} from 'node:fs';
 
-// Exact-font-first rendering. A replacement is permitted only when the SAME
-// font reproduces the existing text pixels with high confidence. Neither the
-// original background nor the replacement characters are AI-generated.
-const FONTS=['Noto Serif CJK KR','Noto Sans CJK KR','DejaVu Sans'];
+// A candidate can be used only if its OFL face was downloaded and verified
+// during this deployment's Docker build. Missing downloads never become fake
+// 'matching' font results via fontconfig fallback.
+const BASE_FONTS=['Noto Serif CJK KR','Noto Sans CJK KR','DejaVu Sans'];
+let installedFontCatalog=[];
+try {
+  const data=JSON.parse(readFileSync(new URL('./font-library.generated.json',import.meta.url),'utf8'));
+  installedFontCatalog=Array.isArray(data.families)?data.families:[];
+}catch{}
+export const availableFontFamilies=()=>[
+  ...BASE_FONTS,
+  ...installedFontCatalog.map(x=>x.family).filter(x=>!BASE_FONTS.includes(x))
+];
+export const availableFontLibraryStats=()=>({
+  curatedFamilies:installedFontCatalog.length,
+  curatedFaces:installedFontCatalog.reduce((sum,x)=>sum+(x.faces||0),0),
+  totalCandidateFamilies:availableFontFamilies().length,
+  categories:Object.fromEntries([...new Set(installedFontCatalog.map(x=>x.category))].map(
+    category=>[category,installedFontCatalog.filter(x=>x.category===category).length]))
+});
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const median=a=>{const v=a.sort((x,y)=>x-y);return v[Math.floor(v.length/2)]};
 // Recover repeatable diagonal/striped printing backgrounds from the
@@ -192,15 +209,39 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
      colors.some(c=>c.length<12))
     throw new Error('기존 글자와 배경을 확실하게 구분할 수 없어. 원본은 유지했어.');
   const ink=colors.map(c=>median(c));
+  // First rank a broad catalog with two cheap sample sizes, then run the
+  // precise legacy size/weight scan on the strongest five families only.
+  // This keeps 20+ installed typefaces from multiplying render time by 20.
+  const candidates=[];
+  for(const font of availableFontFamilies()){
+    let local=null;
+    for(const size of [Math.round(src.h*1.12),Math.round(src.h*1.32)]){
+      if(size<7)continue;
+      const rendered=await alpha(from,font,size,w,h,400);
+      const rm=outMask(rendered,w,h),rb=bounds(rm,w,h);
+      const score=compare(mask,src,rm,rb,w,h);
+      if(!local||score>local.score)local={font,size,weight:400,score};
+    }
+    if(local)candidates.push(local);
+  }
+  candidates.sort((a,b)=>b.score-a.score);
   let best=null;
-  for(const font of FONTS)for(const weight of [400,700])
-    for(const size of [Math.round(src.h*1.03),Math.round(src.h*1.15),Math.round(src.h*1.28),Math.round(src.h*1.42)]){
+  const finalists=new Set([
+    ...BASE_FONTS.slice(0,2),...candidates.slice(0,6).map(x=>x.font)
+  ]);
+  for(const font of finalists)for(const weight of [400,700])
+    for(const size of [Math.round(src.h*1.03),Math.round(src.h*1.15),
+      Math.round(src.h*1.28),Math.round(src.h*1.42)]){
       if(size<7)continue;
       const rendered=await alpha(from,font,size,w,h,weight);
-      const rm=outMask(rendered,w,h), rb=bounds(rm,w,h);
+      const rm=outMask(rendered,w,h),rb=bounds(rm,w,h);
       const score=compare(mask,src,rm,rb,w,h);
       if(!best||score>best.score)best={font,size,weight,score};
     }
+  console.info('font catalog match candidate',JSON.stringify({
+    availableFamilies:availableFontFamilies().length,top:candidates.slice(0,3)
+      .map(({font,score})=>({font,score:+score.toFixed(3)}))
+  }));
   // Deliberately conservative: don't pretend a brush/printed face is a
   // generic Korean sans font. Exact font is otherwise unknowable from pixels.
   if(!best||best.score<.76)
