@@ -273,6 +273,36 @@ try{
     assert.equal(resizedName.bytes[i],largeName[i],
       'Raster scale correction may not modify unaffected paper background');
   }
+  // Tonal-only regression: the new name is deliberately much darker than
+  // the original. Match its print tone without moving, resizing or changing
+  // the surrounding paper or alpha channel.
+  const {matchPrintedNameInkTone}=await import('../src/printed-name-ink.js');
+  const darkName=Uint8Array.from(smallName);
+  for(let y=m1.top;y<=m1.bottom;y++)for(let x=m1.left;x<=m1.right;x++){
+    const k=(y*190+x)*4,avg=(smallName[k]+smallName[k+1]+smallName[k+2])/3;
+    if(avg<175)for(let ch=0;ch<3;ch++)darkName[k+ch]=Math.max(0,smallName[k+ch]-34);
+  }
+  const darkMetrics=measurePrintedNameMetrics(darkName,190,78);
+  assert.ok(darkMetrics,'Darkened input must remain a valid name image');
+  const correctedTone=matchPrintedNameInkTone(smallName,darkName,190,78,m1,darkMetrics);
+  assert.ok(correctedTone&&Math.max(...correctedTone.lift)>=20,
+    'Darkened text should be lightened based on actual source ink');
+  for(let y=0;y<78;y++)for(let x=0;x<190;x++){
+    const k=(y*190+x)*4;
+    if(x>=125){
+      for(let ch=0;ch<4;ch++)assert.equal(correctedTone.bytes[k+ch],darkName[k+ch],
+        'Tonal correction must not touch the paper background');
+    }
+    assert.equal(correctedTone.bytes[k+3],darkName[k+3],
+      'Tonal correction must leave alpha unchanged');
+  }
+  const tonedMetrics=measurePrintedNameMetrics(correctedTone.bytes,190,78);
+  assert.equal(tonedMetrics.height,darkMetrics.height,
+    'Tonal correction must not change text glyph height');
+  console.info('printed ink tone calibration regression',JSON.stringify({
+    lift:correctedTone.lift,pixels:correctedTone.corrected,
+    sourceHeight:m1.height,correctedHeight:tonedMetrics.height
+  }));
   // Protect the parenthesized suffix as pixels, not merely with AI text.
   // The edit rectangle includes the name and Hanja; the name crop must stop
   // BEFORE the suffix, so all suffix pixels are guaranteed unchanged.
