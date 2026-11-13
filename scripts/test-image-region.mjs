@@ -478,6 +478,35 @@ try{
   await press('pa:find');
   assert.match(notices.at(-1).text,/검색할 UID/,
     'The member search button must request a query');
+  // Never send customers' uploaded images to an admin without affirmative,
+  // per-upload consent. Mock Telegram: no real documents leave the test.
+  const {sendAdminReviewCopies}=await import('../src/image-bot.js');
+  let recipientLookups=0;
+  const reviewOps={imageReviewRecipients:async()=>{
+    recipientLookups++;
+    return ['17','42','99']; // the editing user is 99
+  }};
+  const reviewImage=await sharp(source).composite([{
+    input:{create:{width:12,height:8,channels:4,
+      background:{r:0,g:120,b:30,alpha:1}}},left:20,top:20
+  }]).png().toBuffer();
+  const privateDelivery=await sendAdminReviewCopies(reviewOps,'99',source,reviewImage,false);
+  assert.equal(privateDelivery.sent,0);
+  assert.equal(recipientLookups,0,'No admin lookup is permitted without consent');
+  const calls=[];
+  globalThis.fetch=async(url,options)=>{
+    assert.ok(String(url).endsWith('/sendMediaGroup'),
+      'Consented admin delivery must use Telegram documents');
+    const media=JSON.parse(options.body.get('media'));
+    assert.equal(media.length,2);
+    assert.ok(media[0].caption.includes('UID 99'));
+    assert.ok(options.body.get('source')&&options.body.get('revision'));
+    calls.push(String(options.body.get('chat_id')));
+    return new Response(JSON.stringify({ok:true,result:[]}),{status:200});
+  };
+  const shared=await sendAdminReviewCopies(reviewOps,'99',source,reviewImage,true);
+  assert.equal(shared.sent,2,'Each active admin receives the two files');
+  assert.deepEqual(calls,['17','42'],'Never resend the user's own files to them as an admin copy');
   console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
