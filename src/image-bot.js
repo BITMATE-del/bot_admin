@@ -175,20 +175,22 @@ async function ensureTemporaryJobs(pool){
     target_text text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     state text NOT NULL DEFAULT 'ready',
-    error text
+    error text,
+    admin_share boolean NOT NULL DEFAULT FALSE
   )`);
+  await pool.query('ALTER TABLE image_edit_temporary_jobs ADD COLUMN IF NOT EXISTS admin_share boolean NOT NULL DEFAULT FALSE');
   await pool.query("DELETE FROM image_edit_temporary_jobs WHERE created_at < NOW() - INTERVAL '30 minutes'");
 }
 async function storeTemporaryJob(pool,job){
   await pool.query(`INSERT INTO image_edit_temporary_jobs
-    (id,chat_id,uid,image_bytes,source_text,target_text,created_at,state)
-    VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7 / 1000.0),'ready')`,
-    [job.id,String(job.chatId),job.uid,job.buf,job.change.from,job.change.to,job.created]);
+    (id,chat_id,uid,image_bytes,source_text,target_text,created_at,state,admin_share)
+    VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7 / 1000.0),'ready',$8)`,
+    [job.id,String(job.chatId),job.uid,job.buf,job.change.from,job.change.to,job.created,job.adminShare===true]);
 }
 async function readTemporaryJob(pool,id){
   if(!/^[a-f0-9]{32}$/.test(String(id||'')))return null;
   const {rows}=await pool.query(`SELECT id,chat_id,uid,image_bytes,source_text,target_text,
-    (extract(epoch from created_at)*1000)::bigint AS created_ms,state,error
+    (extract(epoch from created_at)*1000)::bigint AS created_ms,state,error,admin_share
     FROM image_edit_temporary_jobs
     WHERE id=$1 AND created_at > NOW() - INTERVAL '30 minutes'`,[id]);
   const row=rows[0];
@@ -197,6 +199,7 @@ async function readTemporaryJob(pool,id){
   // claimed job is never silently replayed, so billing cannot be duplicated.
   const state=['ready','done','failed'].includes(row.state)?row.state:'interrupted';
   return {id:row.id,chatId:row.chat_id,uid:row.uid,buf:row.image_bytes,
+    adminShare:row.admin_share===true,
     change:{from:row.source_text,to:row.target_text},
     created:Number(row.created_ms),state,error:row.error||(
       state==='interrupted'?'서버가 교체되어 이전 편집 작업이 중단됐어. 중복 처리를 막기 위해 같은 작업은 자동 재실행하지 않아.':''
@@ -466,13 +469,13 @@ async function verifyOutputFile(original,edited,allowExtended=false){
     throw new Error('편집본에 비정상적인 투명 영역이 있어 전송하지 않았어.');
   }
 }
-async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false){
+async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false,reviewUid=null){
   await verifyOutputFile(original,edited,allowExtended);
   const form=new FormData();
   form.append('chat_id',String(chatId));
   form.append('media',JSON.stringify([
-    {type:'document',media:'attach://source',caption:'원본'},
-    {type:'document',media:'attach://revision',caption:'편집본 (수정된 이미지)'}
+    {type:'document',media:'attach://source',caption:reviewUid?'원본 · 회원 UID '+reviewUid:'원본'},
+    {type:'document',media:'attach://revision',caption:reviewUid?'편집본 · 회원 UID '+reviewUid:'편집본 (수정된 이미지)'}
   ]));
   const normalized=await sharp(original).rotate().png().toBuffer();
   form.append('source',new Blob([normalized],{type:'image/png'}),'original.png');
@@ -482,6 +485,27 @@ async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false){
   });
   const result=await response.json();
   if(!result.ok)throw new Error(result.description||'원본과 편집본 전송 실패');
+}
+// Share only after explicit per-image consent. Never let an admin delivery
+// error affect user receipt, successful billing, or the editing job state.
+async function sendAdminReviewCopies(authorizedAdmins,uid,original,edited,consent){
+  if(consent!==true)return {sent:0,skipped:true};
+  const actor=String(uid);
+  if(!/^\\d{1,19}$/.test(actor))return {sent:0,skipped:true};
+  let sent=0;
+  let recipients=[];
+  try{recipients=await authorizedAdmins.imageReviewRecipients();}
+  catch(e){console.error('image review recipient lookup:',e.message);return {sent:0};}
+  for(const adminUid of recipients){
+    if(String(adminUid)===actor)continue;
+    try{
+      await sendOriginalAndEdit(adminUid,original,edited,false,actor);
+      sent++;
+    }catch(e){
+      console.error('image review delivery failed:',{adminUid:String(adminUid),reason:e.message});
+    }
+  }
+  return {sent};
 }
 async function download(fileId){
   const file=await tg('getFile',{file_id:fileId});
@@ -493,9 +517,10 @@ async function download(fileId){
   return Buffer.from(arr);
 }
 
-async function makeManualJob(chatId,buf,change,uid,pool){
+async function makeManualJob(chatId,buf,change,uid,pool,adminShare=false){
   const id=crypto.randomBytes(16).toString('hex');
-  const job={id,chatId,uid:String(uid),buf,change,created:Date.now(),busy:false,state:'ready'};
+  const job={id,chatId,uid:String(uid),buf,change,adminShare:adminShare===true,
+    created:Date.now(),busy:false,state:'ready'};
   await storeTemporaryJob(pool,job);
   manualJobs.set(id,job);
   return id;
