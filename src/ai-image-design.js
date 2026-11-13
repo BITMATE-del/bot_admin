@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import {normalizePrintedNameInk} from './printed-name-ink.js';
 
 const API = 'https://api.openai.com/v1/images/edits';
 const ALLOWED = new Set(['gpt-image-2.6-sunburst','gpt-image-2.6-flare','gpt-image-2.5-sunburst','gpt-image-2.5-flare','gpt-image-2']);
@@ -817,7 +818,24 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
       }));
       if(heightDelta>Math.max(2,Math.ceil(before.height*.10))||
          heightDelta<-Math.max(3,Math.ceil(before.height*.13))){
-        mismatch='수정본 글자 크기가 원본 실제 글자 높이와 달라.';
+        // Try an actual raster correction rather than paying for another AI
+        // attempt that often repeats the same oversized letters. Only the
+        // newly generated name ink is transformed; paper is never resized.
+        const fixed=normalizePrintedNameInk(labelOriginal,bytes,w,h,before,after);
+        const checked=fixed?measurePrintedNameMetrics(fixed.bytes,w,h):null;
+        if(checked&&Math.abs(checked.height-before.height)<=1){
+          bytes.set(fixed.bytes);
+          console.info('AI name ink scale corrected',JSON.stringify({
+            originalHeight:before.height,generatedHeight:after.height,
+            correctedHeight:checked.height,repairedPixels:fixed.filled
+          }));
+        }else{
+          mismatch='수정본 글자 크기가 원본 실제 글자 높이와 달라.';
+          console.warn('AI ink scale correction skipped',JSON.stringify({
+            originalHeight:before.height,generatedHeight:after.height,
+            correctedHeight:checked?.height??null
+          }));
+        }
       }
     }
   }
