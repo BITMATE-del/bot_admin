@@ -136,6 +136,20 @@ try{
     if(changed){strictChanged++;assert.ok(inside,'Strict renderer changed an outside pixel');}
   }
   assert.ok(strictChanged>20,'Strict render should modify text');
+  // A faint 2px outline around the OLD text must be erased before the
+  // target is printed; it must not become a second ghost layer.
+  const haloSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><rect width="280" height="140" fill="#fff"/><text x="140" y="76" font-family="Noto Serif CJK KR" font-size="38" stroke="#dedede" stroke-width="4" paint-order="stroke" fill="#191919" text-anchor="middle">박정현</text></svg>');
+  const haloSource=await sharp(haloSvg).png().toBuffer();
+  const haloOutput=await replaceTextStrict(haloSource,strictRect,'박정현','바구리');
+  const cleanOutput=await sharp(strictEdited).ensureAlpha().raw().toBuffer();
+  const haloData=await sharp(haloOutput).ensureAlpha().raw().toBuffer();
+  let haloDifference=0,haloPixels=0;
+  for(let py=40;py<89;py++)for(let px=35;px<245;px++){
+    const k=(py*280+px)*4;
+    for(let ch=0;ch<3;ch++){haloDifference+=Math.abs(haloData[k+ch]-cleanOutput[k+ch]);haloPixels++;}
+  }
+  assert.ok(haloDifference/haloPixels<5,
+    'Light anti-aliased old glyph outlines must not survive as a second text layer');
   const texturedSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" text-anchor="middle">박정현</text></svg>');
   const texturedSource=await sharp(texturedSvg).png().toBuffer();
   const texturedEdited=await replaceTextStrict(texturedSource,strictRect,'박정현','바구리');
