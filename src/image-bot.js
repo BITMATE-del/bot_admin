@@ -17,6 +17,60 @@ import { createPhotoAdminMenu } from './photo-admin-menu.js';
 // Construct a character-complete replacement request. Many labels contain
 // supplementary Hanja and a final ')' outside the user-typed source string.
 // Those neighboring glyphs must NEVER be treated as part of the replacement.
+// When an edit targets only a short Korean name, protect a neighboring
+// parenthetical Hanja suffix by keeping it OUTSIDE the AI edit rectangle.
+// This is conservative; if text geometry is unclear we keep the selected
+// rectangle and rely on the existing validation rather than guessing.
+export async function isolateKoreanNameSelection(sourceBuffer,selection,from,to){
+  if(!/^[가-힣]{2,4}$/.test(from)||! /^[가-힣]{2,4}$/.test(to)||
+    Array.from(from).length!==Array.from(to).length)return selection;
+  const {x,y,w,h}=selection;
+  if(w<72||h<18)return selection;
+  const region=await sharp(sourceBuffer).rotate().extract({left:x,top:y,width:w,height:h})
+    .removeAlpha().raw().toBuffer({resolveWithObject:true});
+  const {data,info}=region,ch=info.channels;
+  const values=[];
+  for(let py=0;py<h;py+=2)for(let px=0;px<w;px+=2){
+    const k=(py*w+px)*ch;
+    values.push((data[k]+data[k+1]+data[k+2])/3);
+  }
+  values.sort((a,b)=>a-b);
+  const paper=values[Math.floor(values.length*.88)];
+  if(paper<165)return selection;
+  const threshold=Math.min(128,paper-62);
+  const ink=new Uint8Array(w);
+  let top=h,bottom=-1,left=w,right=-1;
+  for(let py=0;py<h;py++)for(let px=0;px<w;px++){
+    const k=(py*w+px)*ch;
+    const v=(data[k]+data[k+1]+data[k+2])/3;
+    if(v>=threshold)continue;
+    ink[px]++;
+    top=Math.min(top,py);bottom=Math.max(bottom,py);
+    left=Math.min(left,px);right=Math.max(right,px);
+  }
+  const glyphH=bottom-top+1;
+  if(glyphH<10||glyphH>h*.85||left<2||right>=w-2)return selection;
+  const nominal=left+Array.from(from).length*glyphH*.98;
+  // A distinct suffix should remain substantially to the right of the
+  // expected name boundary. Find an ink-free gap close to that boundary.
+  if(right<nominal+glyphH*.42)return selection;
+  let best=null;
+  for(let cut=Math.max(left+glyphH,Math.floor(nominal-glyphH*.28));
+    cut<=Math.min(w-4,Math.ceil(nominal+glyphH*.28));cut++){
+    const window=ink[Math.max(0,cut-1)]+ink[cut]+ink[Math.min(w-1,cut+1)];
+    const distance=Math.abs(cut-nominal);
+    const penalty=window*5+distance*.20;
+    if(!best||penalty<best.penalty)best={cut,penalty,window};
+  }
+  if(!best||best.window>2||best.cut<left+glyphH)return selection;
+  const protectedPixels=ink.slice(best.cut+2).reduce((sum,v)=>sum+v,0);
+  if(protectedPixels<Math.max(8,glyphH*.6))return selection;
+  const nextW=best.cut+1;
+  console.info('name suffix protected by cropping edit selection',JSON.stringify({
+    oldWidth:w,newWidth:nextW,glyphHeight:glyphH,protectedPixels
+  }));
+  return {...selection,w:nextW};
+}
 export function buildCharacterSafeEditInstruction(from,to,selection){
   const original=JSON.stringify(String(from));
   const replacement=JSON.stringify(String(to));
@@ -34,13 +88,14 @@ export function buildCharacterSafeEditInstruction(from,to,selection){
   ].join(' ');
 }
 async function replaceSelectedText(buf,selection,from,to){
+  const textSelection=await isolateKoreanNameSelection(buf,selection,from,to);
   try{
-    return await replaceTextStrict(buf,selection,from,to);
+    return await replaceTextStrict(buf,textSelection,from,to);
   }catch(error){
     if(!String(error?.message||'').includes('원본 배경 무늬를 정확하게 복원할 근거가 부족해'))throw error;
     console.info('strict background model unavailable; using previously working contextual editor',
       JSON.stringify({width:selection.w,height:selection.h}));
-    return reviseDesignRegion(buf,selection,buildCharacterSafeEditInstruction(from,to,selection));
+    return reviseDesignRegion(buf,textSelection,buildCharacterSafeEditInstruction(from,to,textSelection));
   }
 }
 const token = process.env.IMAGE_BOT_TOKEN;
