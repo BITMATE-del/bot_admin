@@ -149,6 +149,26 @@ const compare=(source,sourceBox,rendered,renderBox,w,h)=>{
   }
   return union?intersection/union:0;
 };
+// Choose the rendered TARGET font size by its actual ink height, not by
+// assuming that different Hangul glyphs have identical bounding boxes.
+export async function matchTargetGlyphHeight(text,font,weight,baseSize,w,h,targetHeight){
+  const candidates=[baseSize-4,baseSize-3,baseSize-2,baseSize-1,baseSize,
+    baseSize+1,baseSize+2,baseSize+3,baseSize+4];
+  let best=null;
+  for(const fontSize of candidates){
+    if(fontSize<7)continue;
+    const data=await alpha(text,font,fontSize,w,h,weight);
+    const box=bounds(outMask(data,w,h),w,h);
+    if(!box||box.left<2||box.right>=w-2||box.top<2||box.bottom>=h-2)continue;
+    const error=Math.abs(box.h-targetHeight);
+    if(!best||error<best.error||
+      (error===best.error&&Math.abs(fontSize-baseSize)<Math.abs(best.fontSize-baseSize))){
+      best={data,box,fontSize,error};
+    }
+    if(error===0&&fontSize===baseSize)break;
+  }
+  return best&&best.error<=1?best:null;
+}
 export async function replaceTextStrict(sourceBuffer,selection,from,to){
   const original=await sharp(sourceBuffer).rotate().png().toBuffer();
   const meta=await sharp(original).metadata();
@@ -246,10 +266,14 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   // generic Korean sans font. Exact font is otherwise unknowable from pixels.
   if(!best||best.score<.76)
     throw new Error('원본 글씨체와 일치하는 서체를 찾지 못했어. 다른 글꼴을 새로 만들어 적용하지 않았고 이용권도 차감하지 않아.');
-  const newImage=await alpha(to,best.font,best.size,w,h,best.weight);
-  const newMask=outMask(newImage,w,h), dest=bounds(newMask,w,h);
-  if(!dest||dest.left<3||dest.top<3||dest.right>=w-3||dest.bottom>=h-3)
+  const fitted=await matchTargetGlyphHeight(to,best.font,best.weight,best.size,w,h,src.h);
+  if(!fitted)throw new Error('새 문구의 실제 글자 높이를 원본과 맞출 수 없어. 원본은 유지했어.');
+  const newImage=fitted.data,dest=fitted.box;
+  if(dest.left<3||dest.top<3||dest.right>=w-3||dest.bottom>=h-3)
     throw new Error('새 문구가 선택 영역을 벗어나거나 잘릴 수 있어. 원본을 유지했어.');
+  console.info('strict replacement glyph-height locked',JSON.stringify({
+    before:src.h,after:dest.h,font:best.font,sourceSize:best.size,targetSize:fitted.fontSize
+  }));
   // The selected rectangle's original flat background can be restored exactly
   // by its robust median RGB. No AI fill, typography hallucination or dark box.
   // Keep all measured background pixels untouched. Repair only source ink,
