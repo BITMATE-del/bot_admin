@@ -127,6 +127,13 @@ try{
     assert.ok(availableFontFamilies().includes('Nanum Myeongjo'));
     assert.ok(availableFontFamilies().includes('Nanum Brush Script'));
   }
+  // Changing Hangul character shapes must not silently change actual
+  // glyph height, even when the font family and source point size match.
+  const {matchTargetGlyphHeight}=await import('../src/strict-text-replace.js');
+  const targetFitted=await matchTargetGlyphHeight(
+    '허연선','Noto Serif CJK KR',400,27,220,80,21);
+  assert.ok(targetFitted&&Math.abs(targetFitted.box.h-21)<=1,
+    'Target text ink height must follow the original 21px glyph height');
   // Strict text replacement must NEVER use the image-generation endpoint.
   // A plain original rendered in an available face should match its source.
   const {replaceTextStrict}=await import('../src/strict-text-replace.js');
