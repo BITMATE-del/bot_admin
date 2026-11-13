@@ -545,7 +545,8 @@ async function showPhotoHome(chatId,uid,adminMenu){
   [{text:'✏️ 편집하기',callback_data:'ui:edit'}],
   [{text:'🎁 첫 무료 이용권 받기',callback_data:'ui:free'}],
   [{text:'🎫 이용권 구매하기',callback_data:'ui:shop'}],
-  [{text:'📊 내 이용권',callback_data:'ui:balance'},{text:'🧾 구매 내역',callback_data:'ui:orders'}]
+  [{text:'📊 내 이용권',callback_data:'ui:balance'},{text:'🧾 구매 내역',callback_data:'ui:orders'}],
+  [{text:'💬 고객센터',url:'https://t.me/angel_solt'}]
  ];
  if(await adminMenu.isAdmin(uid))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
  await sendGuidePhoto(chatId,buttons);
