@@ -29,14 +29,21 @@ export function createPhotoAdminOps(pool){
   ]);
   return {...users.rows[0],...orders.rows[0],...usage.rows[0]};
  }
- async function users(actor,query=''){
+ async function users(actor,query='',requestedPage=0){
   await assertAdmin(actor);
-  const q=String(query).trim().slice(0,80);
+  const q=String(query).trim().slice(0,80).replace(/^@/,'');
+  const pageSize=8;
+  const where=`($1='' OR uid::text LIKE $1||'%' OR username ILIKE '%'||$1||'%' OR display_name ILIKE '%'||$1||'%')`;
+  const count=await pool.query('SELECT COUNT(*)::int AS total FROM image_credit_accounts WHERE '+where,[q]);
+  const total=count.rows[0]?.total||0;
+  const pages=Math.max(1,Math.ceil(total/pageSize));
+  const safePage=Number.isSafeInteger(requestedPage)?requestedPage:0;
+  const page=Math.min(pages-1,Math.max(0,safePage));
   const r=await pool.query(`SELECT uid::text,username,display_name,is_blocked,
    trial_total,paid_total,point_total,last_seen FROM image_credit_accounts
-   WHERE $1='' OR uid::text LIKE $1||'%' OR username ILIKE '%'||$1||'%' OR display_name ILIKE '%'||$1||'%'
-   ORDER BY last_seen DESC NULLS LAST LIMIT 12`,[q]);
-  return r.rows;
+   WHERE `+where+` ORDER BY last_seen DESC NULLS LAST, uid DESC LIMIT $2 OFFSET $3`,
+   [q,pageSize,page*pageSize]);
+  return {items:r.rows,total,pages,page,pageSize};
  }
  async function user(actor,value){
   await assertAdmin(actor);const uid=safeUid(value);if(!uid)throw Error('올바른 UID를 입력해 주세요.');
