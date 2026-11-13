@@ -230,6 +230,15 @@ try{
     'A smooth modern font must not pass as the original detailed serif face'
   );
   assert.equal(strictApiCalls,0,'Typography QA must not call the image-generation API');
+  // Printed-name ink height must be measured in pixels, not inferred
+  // from the entire selection rectangle or the length of Hanja suffix.
+  const {measurePrintedNameMetrics}=await import('../src/ai-image-design.js');
+  const smallName=await sharp(Buffer.from('<svg width="190" height="78" xmlns="http://www.w3.org/2000/svg"><rect width="190" height="78" fill="#dcdcdc"/><text x="20" y="47" font-size="19" font-family="Noto Serif CJK KR" fill="#444">이용주</text></svg>')).ensureAlpha().raw().toBuffer();
+  const largeName=await sharp(Buffer.from('<svg width="190" height="78" xmlns="http://www.w3.org/2000/svg"><rect width="190" height="78" fill="#dcdcdc"/><text x="20" y="49" font-size="27" font-family="Noto Serif CJK KR" fill="#444">허연선</text></svg>')).ensureAlpha().raw().toBuffer();
+  const m1=measurePrintedNameMetrics(smallName,190,78);
+  const m2=measurePrintedNameMetrics(largeName,190,78);
+  assert.ok(m1&&m2&&m2.height>=m1.height+4,
+    'Printed glyph metric must see a 19px -> 27px name enlargement');
   // Protect the parenthesized suffix as pixels, not merely with AI text.
   // The edit rectangle includes the name and Hanja; the name crop must stop
   // BEFORE the suffix, so all suffix pixels are guaranteed unchanged.
