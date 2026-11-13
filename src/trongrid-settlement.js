@@ -55,7 +55,7 @@ function addressHex(addr){
  if(bytes.length!==25||bytes[0]!==0x41)throw Error('Invalid Tron address format');
  return bytes.subarray(0,21).toString('hex');
 }
-export function createTronGridSettlement(pool,notify){
+export function createTronGridSettlement(pool,notify,notifyAdmin=async()=>{}){
  let running=false,healthy=false;
  async function init(){
   await pool.query(`CREATE TABLE IF NOT EXISTS image_payment_transactions(
@@ -117,7 +117,16 @@ export function createTronGridSettlement(pool,notify){
       ['trongrid_auto_approved',row.uid,JSON.stringify({order_id:o.id,txid:tx.txid,asset:o.payment_asset,amount:o.payment_amount,credits:row.credits})]);
      await client.query('COMMIT');approved=true;
     }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}
-    if(approved)await notify(o.uid,'✅ 입금 자동 확인 완료\n이용권 '+o.credits+'매가 지급됐어.\n주문 #'+o.id+'\n/잔여횟수 에서 확인해 줘.').catch(console.error);
+    if(approved){
+     await notify(o.uid,'✅ 입금 자동 확인 완료\n이용권 '+o.credits+'매가 지급됐어.\n주문 #'+o.id+'\n/잔여횟수 에서 확인해 줘.').catch(console.error);
+     const text=['✅ 충전 완료 · 자동 지급',
+       '상태: TronGrid 입금 확정',
+       '회원 UID: '+o.uid,'주문 번호: #'+o.id,
+       '이용권: '+o.credits+'매',
+       '입금 수량: '+o.payment_amount+' '+o.payment_asset,
+       '거래 TXID: '+tx.txid].join('\n');
+     await notifyAdmin(text).catch(e=>console.error('Confirmed recharge admin alert:',e.message));
+    }
    }
   }catch(e){console.error('TronGrid deposit scan:',e.message)}finally{running=false;}
  }
