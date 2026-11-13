@@ -143,8 +143,12 @@ async function replaceSelectedText(buf,selection,from,to){
       const metrics=measurePrintedNameMetrics(area,textSelection.w,textSelection.h);
       if(metrics&&metrics.height>=10){
         preciseHeight=' THE ORIGINAL NAME INK IS EXACTLY '+metrics.height+
-          ' PIXELS HIGH IN THE UPLOADED IMAGE. The replacement must be '+metrics.height+
-          ' pixels high (allow 1 pixel of antialiasing). Do not use the selection rectangle height as font size.';
+          ' PIXELS HIGH AND '+metrics.width+' PIXELS WIDE IN THE UPLOADED IMAGE. '+
+          'The replacement name must stay '+metrics.height+
+          ' pixels high (allow 1 pixel of antialiasing) and must NOT exceed '+
+          (metrics.width+2)+' pixels in width. Keep its original left edge near x='+
+          metrics.left+' and leave at least 5 pixels of clear paper at the edit boundary. '+
+          'This selected rectangle is NOT a text box to fill. Never print a second copy of the Hanja suffix.';
       }
     }catch(err){
       console.info('source name scale measurement skipped',String(err?.message||err).slice(0,100));
