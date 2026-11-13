@@ -315,6 +315,28 @@ try{
   assert.ok(narrowed.w<wideSelection.w*.68,
     'Clear Korean name + Hanja suffix should exclude suffix from AI editing area');
   assert.ok(narrowed.w>38,'Korean name edit area must still cover the full name');
+  // Even if the image model paints over the closing parenthesis, preserve
+  // every suffix pixel from the original scanned image after compositing.
+  const {preserveOriginalNameSuffix}=await import('../src/image-bot.js');
+  const damaged=await sharp(suffixSource).composite([{
+    input:{create:{width:wideSelection.w-narrowed.w,height:wideSelection.h,
+      channels:4,background:{r:255,g:255,b:255,alpha:1}}},
+    left:wideSelection.x+narrowed.w,top:wideSelection.y
+  }]).png().toBuffer();
+  const restored=await preserveOriginalNameSuffix(
+    suffixSource,damaged,wideSelection,narrowed
+  );
+  const beforeRaw=await sharp(suffixSource).ensureAlpha().raw().toBuffer();
+  const afterRaw=await sharp(restored).ensureAlpha().raw().toBuffer();
+  for(let y=wideSelection.y;y<wideSelection.y+wideSelection.h;y++)
+    for(let x=wideSelection.x+narrowed.w;x<wideSelection.x+wideSelection.w;x++){
+      const k=(y*320+x)*4;
+      for(let ch=0;ch<4;ch++)assert.equal(afterRaw[k+ch],beforeRaw[k+ch],
+        'Hanja and last closing parenthesis must stay pixel-identical');
+    }
+  console.info('protected Hanja suffix identical pixels',JSON.stringify({
+    fromX:wideSelection.x+narrowed.w,width:wideSelection.w-narrowed.w
+  }));
   const keepFull=await isolateKoreanNameSelection(suffixSource,wideSelection,'이용주','허연선님');
   assert.deepEqual(keepFull,wideSelection,
     'Never guess cropped spans for replacement words with different character count');
