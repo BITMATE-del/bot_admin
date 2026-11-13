@@ -230,6 +230,17 @@ try{
     'A smooth modern font must not pass as the original detailed serif face'
   );
   assert.equal(strictApiCalls,0,'Typography QA must not call the image-generation API');
+  // Hanja labels and terminal punctuation are out-of-scope immutable glyphs.
+  // Regression: requesting a Korean-name replacement must preserve an
+  // untouched Hanja parenthetical suffix including the rightmost ')'.
+  const {buildCharacterSafeEditInstruction}=await import('../src/image-bot.js');
+  const protectedLabel=buildCharacterSafeEditInstruction('이용주','허연선',{x:5,y:5,w:170,h:42});
+  assert.ok(protectedLabel.includes('exactly "이용주" with exactly "허연선"'));
+  assert.ok(protectedLabel.includes('closing parenthesis )'));
+  assert.ok(protectedLabel.includes('all Hanja characters'));
+  assert.ok(protectedLabel.includes('glyph HEIGHT in pixels'));
+  assert.ok(protectedLabel.includes('editing boundaries, NOT target glyph dimensions'));
+  assert.ok(!protectedLabel.includes('Replace the entire selected area'));
   console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
