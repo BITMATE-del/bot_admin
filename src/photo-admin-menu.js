@@ -1,6 +1,6 @@
 // Inline-only Telegram administration. No password URL or shared admin links.
 export function createPhotoAdminMenu(ops,tg,send){
- const pending=new Map(),expiry=15*60*1000;
+ const pending=new Map(),memberViews=new Map(),expiry=15*60*1000;
  const keyboard=rows=>({inline_keyboard:rows});
  const message=(chat,text,rows)=>tg('sendMessage',{chat_id:chat,text,reply_markup:keyboard(rows),disable_web_page_preview:true});
  const menuRows=[
@@ -17,12 +17,27 @@ export function createPhotoAdminMenu(ops,tg,send){
   const data=await ops.overview(actor);
   await message(chat,'🔐 포토샵봇 관리자 전용\n\n회원 '+fmt(data.total)+'명 · 사용 정지 '+fmt(data.blocked)+'명\n완료된 편집 '+fmt(data.used)+'건 · 구매 승인 대기 '+fmt(data.pending)+'건\n\n아래에서 관리할 메뉴를 선택해 주세요.',menuRows);
  }
- async function search(chat,actor,q=''){
-  const users=await ops.users(actor,q);
-  if(!users.length){await message(chat,'검색된 회원이 없습니다.',back);return;}
-  const rows=users.map(u=>[{text:(u.is_blocked?'⛔ ':'')+(u.display_name||u.username||u.uid).slice(0,23)+' · '+u.uid,callback_data:'pa:user:'+u.uid}]);
+ async function search(chat,actor,q='',page=0){
+  const result=await ops.users(actor,q,page);
+  memberViews.set(String(actor),{q:String(q),page:result.page,at:Date.now()});
+  const rows=result.items.map(u=>[{
+    text:(u.is_blocked?'⛔ ':'👤 ')+(u.display_name||u.username||u.uid).slice(0,18)+' · '+u.uid,
+    callback_data:'pa:user:'+u.uid
+  }]);
+  if(result.pages>1){
+    const paging=[];
+    if(result.page>0)paging.push({text:'◀ 이전',callback_data:'pa:page:'+(result.page-1)});
+    paging.push({text:(result.page+1)+' / '+result.pages+'페이지',callback_data:'pa:noop'});
+    if(result.page<result.pages-1)paging.push({text:'다음 ▶',callback_data:'pa:page:'+(result.page+1)});
+    rows.push(paging);
+  }
+  rows.push([{text:'🔎 UID·아이디·이름 검색',callback_data:'pa:find'}]);
   rows.push(...back);
-  await message(chat,'👥 회원 목록 (최대 12명)\nUID·이름·아이디 검색은 회원 조회 → 검색어 입력을 이용하세요.',rows);
+  const range=result.total?((result.page*result.pageSize)+1)+'–'+
+    Math.min(result.total,(result.page+1)*result.pageSize):'0';
+  await message(chat,'👥 회원 조회\n전체 '+fmt(result.total)+'명 · '+range+'명 표시'+
+    (q?'\n검색: '+String(q).slice(0,80):'')+
+    '\n회원 선택 → 상세 관리',rows);
  }
  async function userDetail(chat,actor,uid){
   const u=await ops.user(actor,uid);
@@ -34,7 +49,7 @@ export function createPhotoAdminMenu(ops,tg,send){
    [{text:'🎁 이용권 지급',callback_data:'pa:give:'+uid},{text:'이용권 증감',callback_data:'pa:editpass:'+uid}],
    [{text:'체험권 횟수 조정',callback_data:'pa:edittrial:'+uid}],
    [{text:u.is_blocked?'✅ 사용 정지 해제':'⛔ 사용 정지',callback_data:'pa:block:'+uid+':'+(u.is_blocked?'0':'1')}],
-   [{text:'↩ 회원 목록',callback_data:'pa:users'},{text:'🏠 관리자 메뉴',callback_data:'pa:home'}]
+   [{text:'↩ 회원 목록',callback_data:'pa:backusers'},{text:'🏠 관리자 메뉴',callback_data:'pa:home'}]
   ];
   await message(chat,text,rows);
  }
@@ -115,7 +130,17 @@ export function createPhotoAdminMenu(ops,tg,send){
     else if(action==='grantpass'){
      active(actor,{mode:'giveuid'});await send(chat,'🎁 이용권 지급할 회원의 텔레그램 UID를 입력하세요.');
     }else if(action==='users'){
-     active(actor,{mode:'search'});await send(chat,'👥 검색할 UID, 텔레그램 아이디 또는 이름을 입력하세요.\n전체 목록은 /관리자 메뉴에서 다시 확인할 수 있습니다.');await search(chat,actor);
+     pending.delete(actor);await search(chat,actor);
+    }else if(action==='find'){
+     active(actor,{mode:'search'});
+     await send(chat,'🔎 검색할 UID·텔레그램 아이디(@ 포함 가능)·이름을 입력하세요.');
+    }else if(action==='page'||action==='backusers'){
+     const state=memberViews.get(actor);
+     if(!state||Date.now()-state.at>expiry){await search(chat,actor);return true;}
+     const requestedPage=action==='page'?Number(parts[2]):state.page;
+     await search(chat,actor,state.q,Number.isSafeInteger(requestedPage)?requestedPage:0);
+    }else if(action==='noop'){
+     return true;
     }else if(action==='lookup'){active(actor,{mode:'lookup'});await send(chat,'🎫 이용권을 관리할 회원의 UID를 입력하세요.');}
     else if(action==='user')await userDetail(chat,actor,parts[2]);
     else if(action==='give'){
