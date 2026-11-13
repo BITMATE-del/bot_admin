@@ -155,13 +155,16 @@ export function mountPhotoAdmin(app,pool){
    const usdt=Number(pack.price_usdt);
    // A shared receiving wallet needs a unique exact deposit amount for each
    // pending order; never credit by nominal package price alone.
-   const micros=BigInt(Math.ceil(usdt*(asset==='USDT'?1:rate)*1000000));
+   // The displayed amount MUST be the stored/matched blockchain amount.
+   // New orders use millitokens (three decimals) for easier deposits.
+   // Existing six-decimal orders are kept unchanged until settled/expired.
+   const millitokens=BigInt(Math.ceil(usdt*(asset==='USDT'?1:rate)*1000-1e-8));
    let result;
    let amount;
-   for(let attempt=0;attempt<60;attempt++){
-    const suffix=BigInt(crypto.randomInt(1,999999));
-    const exact=micros+suffix;
-    amount=(exact/1000000n).toString()+'.'+(exact%1000000n).toString().padStart(6,'0');
+   for(let attempt=0;attempt<80;attempt++){
+    const suffix=BigInt(crypto.randomInt(1,1000));
+    const exact=millitokens+suffix;
+    amount=(exact/1000n).toString()+'.'+(exact%1000n).toString().padStart(3,'0');
     const taken=await c.query(`SELECT 1 FROM image_shop_orders
       WHERE state='pending' AND auto_match=TRUE AND payment_asset=$1 AND
       payment_address=$2 AND payment_amount=$3 LIMIT 1`,[asset,address,amount]);
