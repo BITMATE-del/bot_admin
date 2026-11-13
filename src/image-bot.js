@@ -491,7 +491,7 @@ async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false,re
 async function sendAdminReviewCopies(authorizedAdmins,uid,original,edited,consent){
   if(consent!==true)return {sent:0,skipped:true};
   const actor=String(uid);
-  if(!/^\\d{1,19}$/.test(actor))return {sent:0,skipped:true};
+  if(!/^\d{1,19}$/.test(actor))return {sent:0,skipped:true};
   let sent=0;
   let recipients=[];
   try{recipients=await authorizedAdmins.imageReviewRecipients();}
@@ -677,6 +677,27 @@ async function verifyFreePass(chatId,uid,credits){
 async function handle(update,base,credits,commerce,adminMenu,pool){
   if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
+  if(['review:yes','review:no'].includes(cb?.data)){
+    if(cb.message?.chat?.type!=='private')return;
+    const chatId=cb.message.chat.id;
+    const current=sessions.get(chatId);
+    const valid=current&&current.awaitingShare===true&&
+      Date.now()-current.created<=ttl&&String(current.uid)===String(cb.from.id);
+    if(!valid){
+      await tg('answerCallbackQuery',{callback_query_id:cb.id,
+        text:'공유 선택이 만료됐어. 이미지를 다시 올려 줘.',show_alert:true}).catch(()=>{});
+      return;
+    }
+    current.adminShare=cb.data==='review:yes';
+    current.awaitingShare=false;
+    await tg('answerCallbackQuery',{callback_query_id:cb.id,
+      text:current.adminShare?'관리자 공유에 동의했어.':'관리자에게 공유하지 않아.'}).catch(()=>{});
+    const b=await credits.status(cb.from.id);
+    await send(chatId,(current.adminShare?'✅ 작업 결과 관리자 공유 동의':'🔒 관리자 공유 없이 편집')+
+      '\n바꿀 문구를 입력해 줘. 예: 일식 > 한식'+
+      '\n🎫 잔여 편집 횟수: '+b.remaining+'회');
+    return;
+  }
   if(cb?.data==='ui:home'){
     if(cb.message?.chat?.type!=='private')return;
     await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
@@ -834,18 +855,32 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
   if(item){
     const buf=await download(item.file_id);
     await sharp(buf).metadata();
-    sessions.set(chatId,{buf,created:Date.now(),mode:'edit'});
+    sessions.set(chatId,{buf,created:Date.now(),mode:'edit',
+      uid:String(msg.from.id),awaitingShare:true,adminShare:false});
     pending.delete(String(msg.from.id));
     const balance=await credits.status(msg.from.id);
     if(balance.is_blocked){sessions.delete(chatId);await send(chatId,'관리자가 사용을 제한한 계정이야.');return;}
-    await send(chatId,balance.remaining>0
-      ?'이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\n🎫 잔여 편집 횟수: '+balance.remaining+'회'
-      :'이용 가능한 편집 이용권이 없어. /start에서 첫 무료 이용권 받기를 누르거나 이용권을 구매해 줘.');
+    if(balance.remaining<1){
+      await send(chatId,'이용 가능한 편집 이용권이 없어. /start에서 첫 무료 이용권 받기를 누르거나 이용권을 구매해 줘.');
+      return;
+    }
+    await tg('sendMessage',{chat_id:chatId,
+      text:'🖼 이미지를 받았어.\n\n작업 완료 후 원본과 편집본을 관리자에게도 전달할까?'+
+        '\n개인정보가 포함된 이미지는 공유하지 않는 것을 권장해. 이번 이미지에만 적용돼.',
+      reply_markup:{inline_keyboard:[
+        [{text:'✅ 관리자 공유 동의',callback_data:'review:yes'}],
+        [{text:'🔒 공유하지 않고 편집',callback_data:'review:no'}]
+      ]}
+    });
     return;
   }
   if(!msg.text)return;
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
+  if(saved.awaitingShare===true){
+    await send(chatId,'먼저 위 메시지에서 작업물 관리자 공유 여부를 선택해 줘.');
+    return;
+  }
   const compact=msg.text.trim().match(/^([^\s>→]{1,50})\s+([^\s>→]{1,50})$/u);
   const changes=pairs(msg.text) || (compact && /\d/.test(compact[1]) && /\d/.test(compact[2]) ? [{from:compact[1],to:compact[2]}] : null);
   if(!changes){
@@ -881,7 +916,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
     await send(chatId,'편집 이용권이 부족해. /이용권구매 에서 추가 구매를 신청할 수 있어.');
     return;
   }
-  const manualId=await makeManualJob(chatId,saved.buf,changes[0],msg.from.id,pool);
+  const manualId=await makeManualJob(chatId,saved.buf,changes[0],msg.from.id,pool,saved.adminShare);
   await sendManualLink(chatId,manualId,base);
   // Optional OCR previews must never block selection. The preview is an
   // enhancement only, and is disabled by default because Korean OCR warmup
@@ -896,7 +931,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       ]);
       const {output,preview,regions}=outcome;
       const id=crypto.randomBytes(8).toString('hex');
-      pending.set(String(msg.from.id),{id,chatId,output,regions,buf:saved.buf,change:changes[0],created:Date.now()});
+      pending.set(String(msg.from.id),{id,chatId,output,regions,buf:saved.buf,change:changes[0],adminShare:saved.adminShare,created:Date.now()});
       await sendPreview(chatId,preview,id,editorUrl(manualId));
     }catch(e){
       console.warn('Optional OCR preview skipped; manual editor remains available:',e.message);
