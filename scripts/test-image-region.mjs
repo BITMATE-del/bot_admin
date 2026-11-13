@@ -289,6 +289,16 @@ try{
   }
   assert.ok(survivingTop>=6,'Thin detached top stroke must survive height normalization');
   console.info('generic thin-top-stroke retained',JSON.stringify({pixels:survivingTop}));
+  // Order amount must remain an exact-match on-chain quantity. Postgres
+  // NUMERIC(22,6) pads new 3-decimal orders to six decimal places.
+  const {displayExactPaymentAmount}=await import('../src/image-bot.js');
+  assert.equal(displayExactPaymentAmount('25.558000'),'25.558',
+    'New 3-decimal payment quantity must not expose DB padding');
+  assert.equal(displayExactPaymentAmount('25.500000'),'25.500',
+    'Three places must be retained even for round-looking amounts');
+  assert.equal(displayExactPaymentAmount('25.558994'),'25.558994',
+    'Legacy payment must NEVER be rounded or hidden: auto-match needs exact value');
+  assert.equal(displayExactPaymentAmount('25'),'25.000');
   // Generic right-edge clipping detection: unchanged punctuation should
   // never trigger a false alarm, while newly cut-off ink still fails.
   const {detectNewRightEdgeInk}=await import('../src/ai-image-design.js');
