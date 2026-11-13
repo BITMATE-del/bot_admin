@@ -241,7 +241,7 @@ function assessLabelConsistency(original,edited,w,h){
 // texture and measures solid near-black ink runs, looking for an obvious loss
 // of thick/thin variation. Different characters naturally change run lengths,
 // so only extreme departures can fail this heuristic.
-function assessTexturedInkStrokeContrast(original,edited,w,h){
+export function assessTexturedInkStrokeContrast(original,edited,w,h){
   if(w<55||h<24||original.length!==edited.length)return null;
   const borderBrightness=[];
   for(let y=0;y<h;y++)for(let x=0;x<w;x++)
