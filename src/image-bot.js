@@ -24,7 +24,7 @@ async function replaceSelectedText(buf,selection,from,to){
     return reviseDesignRegion(buf,selection,
       'Replace ONLY the exact original text '+JSON.stringify(from)+
       ' with '+JSON.stringify(to)+
-      '. Preserve the existing patterned background, print texture, original ink stroke contrast, font family, glyph height, baseline and horizontal center. Remove the COMPLETE previous lettering, including faint gray upper shadows, old antialiased strokes and double-printed ghost outlines, before printing the replacement characters ONCE. Never overlap the previous text or leave a light second text layer above the new text. Keep the existing background pattern seamless, and do not invent a new clean Korean font or redesign the image.');
+      '. Preserve the existing patterned background, print texture, original ink stroke contrast, font family, glyph height, baseline and horizontal center. IMPORTANT: retain the original LIGHT, THIN stroke weight and natural muted ink opacity; never bolden, darken, thicken, sharpen, or boost contrast of the replacement characters. Remove only faint ghost remnants of the OLD letters before rendering the new letters once, without repainting the patterned background. Keep the original subtle antique printed appearance; do not invent a new font or redesign the image.');
   }
 }
 const token = process.env.IMAGE_BOT_TOKEN;
