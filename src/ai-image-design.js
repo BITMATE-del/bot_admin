@@ -861,8 +861,14 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   if(mismatch){
     if(attempt===0){
       console.warn('image label quality retry:',mismatch);
+      const originalName=instruction.includes('STRICT TEXT SUBSTITUTION')
+        ?measurePrintedNameMetrics(labelOriginal,w,h):null;
+      const metricDirective=originalName&&mismatch==='수정본 글자 크기가 원본 실제 글자 높이와 달라.'
+        ?' SOURCE NAME GLYPH HEIGHT IS EXACTLY '+originalName.height+
+          ' PIXELS in this original-resolution crop. The new Korean name must have that SAME ink bounding-box height (tolerance 1 pixel), not the height of the edit rectangle. Preserve adjacent Hanja and both parentheses completely. '
+        :' ';
       return reviseDesignRegion(sourceBuffer,selection,
-        instruction+' ORIGINAL FONT FAILURE: Match the original Korean font family and stroke style exactly. If source is brush calligraphy, imitate variable brush strokes, serifs, ink taper, fine hairline strokes, uneven curves and original print noise. Never switch to generic clean sans-serif. Keep the background stripes or texture intact. CRITICAL IMAGE QA FAILURE: Keep the edited text at the SAME source font-size and visible glyph height (at most 1-2 pixels of raster difference), and the original line center X and center Y. Longer numbers may be wider, but NEVER taller, heavier or rescaled. If the line cannot fit, preserve glyph height and do not guess an enlarged replacement. Keep clear left/right padding, the original baseline, font weight, color and the unaffected lines. Never enlarge the number or shift its horizontal alignment.',1);
+        instruction+metricDirective+' ORIGINAL FONT FAILURE: Match the original Korean font family and stroke style exactly. If source is brush calligraphy, imitate variable brush strokes, serifs, ink taper, fine hairline strokes, uneven curves and original print noise. Never switch to generic clean sans-serif. Keep the background stripes or texture intact. CRITICAL IMAGE QA FAILURE: Keep the edited text at the SAME source font-size and visible glyph height (at most 1-2 pixels of raster difference), and the original line center X and center Y. Longer numbers may be wider, but NEVER taller, heavier or rescaled. If the line cannot fit, preserve glyph height and do not guess an enlarged replacement. Keep clear left/right padding, the original baseline, font weight, color and the unaffected lines. Never enlarge the number or shift its horizontal alignment.',1);
     }
     throw new Error('텍스트 스타일 검수 실패: '+mismatch+' 원본은 유지했어.');
   }
