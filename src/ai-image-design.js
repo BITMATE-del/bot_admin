@@ -236,6 +236,40 @@ function assessLabelConsistency(original,edited,w,h){
   return null;
 }
 
+// Measure dark printed glyph height independently of the surrounding
+// diagonal paper pattern. Used ONLY when the requested replacement is a short
+// isolated name; unlike flat-label QA, this works on lightly textured paper.
+export function measurePrintedNameMetrics(bytes,w,h){
+  if(w<30||h<14||bytes.length<w*h*4)return null;
+  const luminance=new Uint8Array(w*h);
+  const sample=[];
+  for(let py=0;py<h;py++)for(let px=0;px<w;px++){
+    const i=(py*w+px)*4,v=Math.round((bytes[i]+bytes[i+1]+bytes[i+2])/3);
+    luminance[py*w+px]=v;
+    if((px+py)%3===0)sample.push(v);
+  }
+  sample.sort((a,b)=>a-b);
+  const paper=sample[Math.floor(sample.length*.85)];
+  if(paper<165)return null;
+  const threshold=Math.min(130,paper-57);
+  const rows=new Uint16Array(h),cols=new Uint16Array(w);
+  let dark=0;
+  for(let py=0;py<h;py++)for(let px=0;px<w;px++){
+    if(luminance[py*w+px]>=threshold)continue;
+    dark++;rows[py]++;cols[px]++;
+  }
+  if(dark<w*h*.012||dark>w*h*.38)return null;
+  // Exclude stray dust pixels: the row needs several substantial foreground
+  // pixels, rather than one isolated speck.
+  const rowMin=Math.max(3,Math.floor(w*.035));
+  const colMin=Math.max(2,Math.floor(h*.06));
+  let top=h,bottom=-1,left=w,right=-1;
+  for(let py=0;py<h;py++)if(rows[py]>=rowMin){top=Math.min(top,py);bottom=Math.max(bottom,py);}
+  for(let px=0;px<w;px++)if(cols[px]>=colMin){left=Math.min(left,px);right=Math.max(right,px);}
+  if(bottom<top||right<left||top<1||bottom>=h-1)return null;
+  return {height:bottom-top+1,width:right-left+1,top,bottom,left,right,
+    centerY:(top+bottom)/2,paper,threshold};
+}
 // High-confidence warning for dark calligraphic lettering over patterned
 // bright backgrounds. Unlike the flat-label detector, this ignores background
 // texture and measures solid near-black ink runs, looking for an obvious loss
@@ -769,6 +803,24 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     }
   }
   let mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
+  // These are INK metrics, not the height/width of the user selection.
+  // The crop may include adjacent non-name text on arbitrary edits, so
+  // apply only to the strict same-length Korean name substitution pathway.
+  if(!mismatch&&instruction.includes('STRICT TEXT SUBSTITUTION')){
+    const before=measurePrintedNameMetrics(labelOriginal,w,h);
+    const after=measurePrintedNameMetrics(bytes,w,h);
+    if(before&&after&&before.height>=12){
+      const heightDelta=after.height-before.height;
+      console.info('printed name glyph scale',JSON.stringify({
+        original:before.height,edited:after.height,delta:heightDelta,
+        width:w,height:h,attempt
+      }));
+      if(heightDelta>Math.max(2,Math.ceil(before.height*.10))||
+         heightDelta<-Math.max(3,Math.ceil(before.height*.13))){
+        mismatch='수정본 글자 크기가 원본 실제 글자 높이와 달라.';
+      }
+    }
+  }
   // Stroke-contrast and perimeter statistics cannot establish identical
   // typeface when the WORDS themselves differ. They previously triggered an
   // expensive AI retry even for an otherwise usable, correctly composited
