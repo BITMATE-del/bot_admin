@@ -551,9 +551,22 @@ async function showPhotoHome(chatId,uid,adminMenu){
  if(await adminMenu.isAdmin(uid))buttons.push([{text:'🔐 관리자 전용',callback_data:'pa:home'}]);
  await sendGuidePhoto(chatId,buttons);
 }
+// The DB payment_amount column has NUMERIC(22,6) scale. New millitoken
+// orders return with three zero-padded extra places; display three decimals.
+// Never shorten an older six-decimal order containing a non-zero tail:
+// the payment watcher requires an exact chain amount for auto-credit.
+export function displayExactPaymentAmount(amount){
+ const value=String(amount);
+ const matched=/^(\\d+)(?:\\.(\\d{1,6}))?$/.exec(value);
+ if(!matched)return value;
+ const fraction=(matched[2]||'').padEnd(6,'0');
+ return fraction.slice(3)==='000'
+   ?matched[1]+'.'+fraction.slice(0,3)
+   :value;
+}
 async function sendInvoice(chatId,order,commerce){
  const asset=order.payment_asset;
- const exactly=String(order.payment_amount);
+ const exactly=displayExactPaymentAmount(order.payment_amount);
  const text=(order.existing?'🔄 기존 입금 대기 주문 재안내':'✅ 이용권 구매 신청 완료')+
   '\n주문 번호: #'+order.id+
   '\n상품: '+order.name+' ('+order.credits+'매)'+
@@ -680,7 +693,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       const states={pending:'입금 확인 대기',approved:'승인 완료',rejected:'거절'};
       await send(chatId,items.length
         ?'🧾 구매 신청 내역\n'+items.map(x=>'#'+x.id+' '+x.package_name+
-          ' ('+x.credits+'매 / '+Number(x.payment_amount||0).toLocaleString('en-US')+' '+(x.payment_asset||'USDT')+') · '+(states[x.state]||x.state)).join('\n')
+          ' ('+x.credits+'매 / '+displayExactPaymentAmount(x.payment_amount||0)+' '+(x.payment_asset||'USDT')+') · '+(states[x.state]||x.state)).join('\n')
         :'아직 구매 신청 내역이 없어.');
     }
     return;
