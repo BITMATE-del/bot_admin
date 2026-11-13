@@ -248,6 +248,23 @@ try{
     'A smooth modern font must not pass as the original detailed serif face'
   );
   assert.equal(strictApiCalls,0,'Typography QA must not call the image-generation API');
+  // Generic right-edge clipping detection: unchanged punctuation should
+  // never trigger a false alarm, while newly cut-off ink still fails.
+  const {detectNewRightEdgeInk}=await import('../src/ai-image-design.js');
+  const rw=30,rh=20,white=new Uint8Array(rw*rh*4).fill(255);
+  const withExisting=Uint8Array.from(white);
+  for(let yy=4;yy<13;yy++)for(const xx of [rw-2,rw-1]){
+    const k=(yy*rw+xx)*4;
+    for(let ch=0;ch<3;ch++)withExisting[k+ch]=60;
+  }
+  assert.equal(detectNewRightEdgeInk(withExisting,withExisting,rw,rh,[255,255,255]),false,
+    'Unmodified right-edge punctuation must never count as new clipping');
+  assert.equal(detectNewRightEdgeInk(white,withExisting,rw,rh,[255,255,255]),true,
+    'Actual newly clipped content at boundary must still be rejected');
+  const isolated=Uint8Array.from(white);
+  for(let ch=0;ch<3;ch++)isolated[((7*rw)+(rw-1))*4+ch]=25;
+  assert.equal(detectNewRightEdgeInk(white,isolated,rw,rh,[255,255,255]),false,
+    'Isolated border noise must not abort an otherwise valid image edit');
   // Printed-name ink height must be measured in pixels, not inferred
   // from the entire selection rectangle or the length of Hanja suffix.
   const {measurePrintedNameMetrics}=await import('../src/ai-image-design.js');
