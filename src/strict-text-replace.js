@@ -68,6 +68,38 @@ const backgroundModel=(pixels,w,h,extraPoints=[])=>{
   }));
   return null;
 };
+// Pure pixel-level cleanup so faint-ink removal can be tested separately from
+// candidate-font size selection and clipping checks.
+export function restoreOldGlyphHalos(region,mask,soft,model,w,h){
+  const base=Buffer.from(region);
+  // Remove faint remnants of the OLD glyph before compositing the new glyph.
+  // Crucially, do not paint every differing pixel: repeating hatching, grain,
+  // shadows and compression noise must remain intact. Restrict restoration to
+  // a 3px neighborhood of confidently detected old ink, including antialiasing
+  // at the top of letters. Do not expand the text bounding rectangle.
+  const oldInkNeighborhood=new Uint8Array(w*h);
+  for(let py=0;py<h;py++)for(let px=0;px<w;px++)if(mask[py*w+px]){
+    for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){
+      const xx=px+dx,yy=py+dy;
+      if(xx>=0&&xx<w&&yy>=0&&yy<h)oldInkNeighborhood[yy*w+xx]=1;
+    }
+  }
+  let restored=0;
+  for(let i=0;i<w*h;i++){
+    if(!oldInkNeighborhood[i]||soft[i]<10)continue;
+    const k=i*4,x=i%w,y=Math.floor(i/w),predicted=model.at(x,y);
+    // At >26 RGB difference we replace confident old-ink remnants; for a
+    // 10..26 antialiased edge gradually blend into the unchanged pattern.
+    const opacity=Math.max(0,Math.min(1,(soft[i]-10)/16));
+    for(let ch=0;ch<3;ch++)
+      base[k+ch]=Math.round(base[k+ch]*(1-opacity)+predicted[ch]*opacity);
+    base[k+3]=255;
+    restored++;
+  }
+  return {base,restored};
+
+}
+
 const bounds=(mask,w,h)=>{
   let left=w,top=h,right=-1,bottom=-1,n=0;
   for(let y=0;y<h;y++)for(let x=0;x<w;x++)if(mask[y*w+x]){
@@ -181,31 +213,7 @@ export async function replaceTextStrict(sourceBuffer,selection,from,to){
   // by its robust median RGB. No AI fill, typography hallucination or dark box.
   // Keep all measured background pixels untouched. Repair only source ink,
   // using modeled repeating background when a texture is present.
-  const base=Buffer.from(region);
-  // Remove faint remnants of the OLD glyph before compositing the new glyph.
-  // Crucially, do not paint every differing pixel: repeating hatching, grain,
-  // shadows and compression noise must remain intact. Restrict restoration to
-  // a 3px neighborhood of confidently detected old ink, including antialiasing
-  // at the top of letters. Do not expand the text bounding rectangle.
-  const oldInkNeighborhood=new Uint8Array(w*h);
-  for(let py=0;py<h;py++)for(let px=0;px<w;px++)if(mask[py*w+px]){
-    for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){
-      const xx=px+dx,yy=py+dy;
-      if(xx>=0&&xx<w&&yy>=0&&yy<h)oldInkNeighborhood[yy*w+xx]=1;
-    }
-  }
-  let restored=0;
-  for(let i=0;i<w*h;i++){
-    if(!oldInkNeighborhood[i]||soft[i]<10)continue;
-    const k=i*4,x=i%w,y=Math.floor(i/w),predicted=model.at(x,y);
-    // At >26 RGB difference we replace confident old-ink remnants; for a
-    // 10..26 antialiased edge gradually blend into the unchanged pattern.
-    const opacity=Math.max(0,Math.min(1,(soft[i]-10)/16));
-    for(let ch=0;ch<3;ch++)
-      base[k+ch]=Math.round(base[k+ch]*(1-opacity)+predicted[ch]*opacity);
-    base[k+3]=255;
-    restored++;
-  }
+  const {base,restored}=restoreOldGlyphHalos(region,mask,soft,model,w,h);
   console.info('strict text faint-ink cleanup',JSON.stringify({width:w,height:h,restored}));
   const offsetX=Math.round((src.left+src.right-dest.left-dest.right)/2);
   const offsetY=Math.round((src.top+src.bottom-dest.top-dest.bottom)/2);
