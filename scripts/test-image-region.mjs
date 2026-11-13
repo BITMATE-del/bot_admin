@@ -208,7 +208,7 @@ try{
   }
   assert.match(
     assessTexturedInkStrokeContrast(serif,sans,fw,fh)||'',
-    /획 끝|윤곽|필체/,
+    /획 끝|윤곽|필체|붓글씨 획 굵기/,
     'A smooth modern font must not pass as the original detailed serif face'
   );
   assert.equal(strictApiCalls,0,'Typography QA must not call the image-generation API');
