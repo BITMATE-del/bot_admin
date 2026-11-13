@@ -677,27 +677,6 @@ async function verifyFreePass(chatId,uid,credits){
 async function handle(update,base,credits,commerce,adminMenu,pool){
   if(await adminMenu.handle(update))return;
   const cb=update.callback_query;
-  if(['review:yes','review:no'].includes(cb?.data)){
-    if(cb.message?.chat?.type!=='private')return;
-    const chatId=cb.message.chat.id;
-    const current=sessions.get(chatId);
-    const valid=current&&current.awaitingShare===true&&
-      Date.now()-current.created<=ttl&&String(current.uid)===String(cb.from.id);
-    if(!valid){
-      await tg('answerCallbackQuery',{callback_query_id:cb.id,
-        text:'공유 선택이 만료됐어. 이미지를 다시 올려 줘.',show_alert:true}).catch(()=>{});
-      return;
-    }
-    current.adminShare=cb.data==='review:yes';
-    current.awaitingShare=false;
-    await tg('answerCallbackQuery',{callback_query_id:cb.id,
-      text:current.adminShare?'관리자 공유에 동의했어.':'관리자에게 공유하지 않아.'}).catch(()=>{});
-    const b=await credits.status(cb.from.id);
-    await send(chatId,(current.adminShare?'✅ 작업 결과 관리자 공유 동의':'🔒 관리자 공유 없이 편집')+
-      '\n바꿀 문구를 입력해 줘. 예: 일식 > 한식'+
-      '\n🎫 잔여 편집 횟수: '+b.remaining+'회');
-    return;
-  }
   if(cb?.data==='ui:home'){
     if(cb.message?.chat?.type!=='private')return;
     await tg('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
@@ -831,7 +810,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
   const chatId=msg.chat.id;
   await credits.touch(msg.from.id,msg.from);
   const userKey=String(msg.from.id);
-  if(msg.text?.trim()==='/취소'){purchasePending.delete(userKey);await send(chatId,'진행 중이던 구매 신청을 취소했어.');return;}
+  if(msg.text?.trim()==='/취소'){purchasePending.delete(userKey);sessions.delete(chatId);pending.delete(userKey);await send(chatId,'진행 중이던 편집 또는 구매 신청을 취소했어.');return;}
   if(['/무료이용권','/무료체험','/free'].includes(msg.text?.trim())){await showFreePass(chatId,msg.from.id,credits);return;}
   if(['/이용권구매','/구매','/shop'].includes(msg.text?.trim())){await showPhotoShop(chatId,commerce);return;}
   if(['/구매내역','/orders'].includes(msg.text?.trim())){
@@ -858,7 +837,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
     const buf=await download(item.file_id);
     await sharp(buf).metadata();
     sessions.set(chatId,{buf,created:Date.now(),mode:'edit',
-      uid:String(msg.from.id),awaitingShare:true,adminShare:false});
+      uid:String(msg.from.id),adminShare:false,reviewNoticeShown:true});
     pending.delete(String(msg.from.id));
     const balance=await credits.status(msg.from.id);
     if(balance.is_blocked){sessions.delete(chatId);await send(chatId,'관리자가 사용을 제한한 계정이야.');return;}
@@ -866,23 +845,18 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       await send(chatId,'이용 가능한 편집 이용권이 없어. /start에서 첫 무료 이용권 받기를 누르거나 이용권을 구매해 줘.');
       return;
     }
-    await tg('sendMessage',{chat_id:chatId,
-      text:'🖼 이미지를 받았어.\n\n작업 완료 후 원본과 편집본을 관리자에게도 전달할까?'+
-        '\n개인정보가 포함된 이미지는 공유하지 않는 것을 권장해. 이번 이미지에만 적용돼.',
-      reply_markup:{inline_keyboard:[
-        [{text:'✅ 관리자 공유 동의',callback_data:'review:yes'}],
-        [{text:'🔒 공유하지 않고 편집',callback_data:'review:no'}]
-      ]}
-    });
+    await send(chatId,'🖼 이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\n'+
+      '🎫 잔여 편집 횟수: '+balance.remaining+'회\n'+
+      '안내: 편집을 진행하면 원본과 편집본이 서비스 관리자에게도 전달돼. 공유를 원하지 않으면 편집을 진행하지 말고 /취소 를 입력해 줘.');
     return;
   }
   if(!msg.text)return;
   const saved=sessions.get(chatId);
   if(!saved||Date.now()-saved.created>ttl){sessions.delete(chatId);await send(chatId,'먼저 이미지를 업로드해 줘.');return;}
-  if(saved.awaitingShare===true){
-    await send(chatId,'먼저 위 메시지에서 작업물 관리자 공유 여부를 선택해 줘.');
-    return;
-  }
+  // The user submits an edit instruction only after receiving the clear
+  // disclosure in the image receipt. Do not interrupt with extra buttons.
+  // Old sessions without that notice must never be forwarded to admins.
+  saved.adminShare=saved.reviewNoticeShown===true;
   const compact=msg.text.trim().match(/^([^\s>→]{1,50})\s+([^\s>→]{1,50})$/u);
   const changes=pairs(msg.text) || (compact && /\d/.test(compact[1]) && /\d/.test(compact[2]) ? [{from:compact[1],to:compact[2]}] : null);
   if(!changes){
