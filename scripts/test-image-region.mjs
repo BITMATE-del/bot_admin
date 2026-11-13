@@ -116,6 +116,17 @@ try{
     /텍스트 스타일 검수 실패|오른쪽 경계/
   );
   assert.ok(qualityCalls>=1&&qualityCalls<=2,'Bad output must be rejected with at most one quality retry');
+  // Verify actual curated font binaries were fetched during Docker build.
+  // In local dev the manifest is absent; CI's Dockerfile creates it first.
+  const {availableFontLibraryStats,availableFontFamilies}=await import('../src/strict-text-replace.js');
+  if(process.env.REQUIRE_CURATED_FONTS==='1'){
+    const library=availableFontLibraryStats();
+    console.info('curated Korean font catalog verified',JSON.stringify(library));
+    assert.ok(library.curatedFamilies>=20,'Must install 20+ licensed Korean font families');
+    assert.ok(library.curatedFaces>=30,'Must install 30+ Korean font faces');
+    assert.ok(availableFontFamilies().includes('Nanum Myeongjo'));
+    assert.ok(availableFontFamilies().includes('Nanum Brush Script'));
+  }
   // Strict text replacement must NEVER use the image-generation endpoint.
   // A plain original rendered in an available face should match its source.
   const {replaceTextStrict}=await import('../src/strict-text-replace.js');
@@ -154,7 +165,7 @@ try{
   assert.equal(restoredResult.base[ghostIndex*4],255,'Faint old text remnant must be erased');
   assert.equal(restoredResult.base[backgroundIndex*4],220,'Unrelated background texture must remain intact');
   assert.equal(hregion[ghostIndex*4],220,'Original input pixels must never be mutated');
-  const texturedSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" text-anchor="middle">박정현</text></svg>');
+  const texturedSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" font-family="Noto Sans CJK KR" text-anchor="middle">박정현</text></svg>');
   const texturedSource=await sharp(texturedSvg).png().toBuffer();
   const texturedEdited=await replaceTextStrict(texturedSource,strictRect,'박정현','바구리');
   const texturedBefore=await sharp(texturedSource).ensureAlpha().raw().toBuffer();
