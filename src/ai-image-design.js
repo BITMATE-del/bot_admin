@@ -258,7 +258,7 @@ export function measurePrintedNameMetrics(bytes,w,h){
     if(luminance[py*w+px]>=threshold)continue;
     dark++;rows[py]++;cols[px]++;
   }
-  if(dark<w*h*.012||dark>w*h*.38)return null;
+  if(dark<Math.max(40,w*h*.005)||dark>w*h*.38)return null;
   // Exclude stray dust pixels: the row needs several substantial foreground
   // pixels, rather than one isolated speck.
   const rowMin=Math.max(3,Math.floor(w*.035));
