@@ -534,6 +534,31 @@ function alignFlatLabelCenter(original,generated,w,h){
   return {data:out,dx,dy};
 }
 
+// Common clipping check for all image edits. A right-side foreground mark
+// that was already present in the input is not new clipped content. Require
+// a connected dark mark at the OUTERMOST column, not only within a two-pixel
+// margin, to avoid false failures on print texture and existing punctuation.
+export function detectNewRightEdgeInk(original,edited,w,h,bg,threshold=48){
+  if(w<6||h<8||original.length<w*h*4||edited.length<w*h*4)return false;
+  const ink=(data,x,y)=>{
+    const k=(y*w+x)*4;
+    return Math.max(Math.abs(data[k]-bg[0]),Math.abs(data[k+1]-bg[1]),
+      Math.abs(data[k+2]-bg[2]))>=threshold;
+  };
+  let connected=0,changed=0;
+  for(let y=2;y<h-2;y++){
+    const newEdge=ink(edited,w-1,y)&&ink(edited,w-2,y);
+    const oldEdge=ink(original,w-1,y)&&ink(original,w-2,y);
+    if(newEdge&&!oldEdge){
+      changed++;
+      // Adjacent scanlines form a real cut-off glyph; a lone dust pixel
+      // should not cause the entire edit to fail.
+      if(y>2&&ink(edited,w-1,y-1))connected++;
+    }
+  }
+  return changed>=Math.max(3,Math.ceil(h*.10))&&connected>=2;
+}
+
 export async function reviseDesignRegion(sourceBuffer,selection,instruction,attempt=0) {
   const {upright,width:W,height:H} = await check(sourceBuffer);
   const {x,y,w,h} = selection;
@@ -764,7 +789,6 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
   // On flat UI label backgrounds, reject foreground pixels that touch the
   // selection boundary: clipping is irreversible after patch extraction.
   // Only evaluate a likely text region; textured photographs are ignored.
-  const edgeBand=Math.min(2,Math.max(1,Math.floor(w/14)));
   const borderSamples=[];
   for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++){
     if(xx<2||yy<2||xx>=w-2||yy>=h-2){
@@ -773,35 +797,18 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     }
   }
   const median=arr=>{arr.sort((a,b)=>a-b);return arr[Math.floor(arr.length/2)]};
-  const bg=[0,1,2].map(c=>median(borderSamples.map(px=>px[c])));
-  const delta=(buffer,i)=>Math.max(
-    Math.abs(buffer[i]-bg[0]),Math.abs(buffer[i+1]-bg[1]),Math.abs(buffer[i+2]-bg[2])
-  );
-  const borderNoise=borderSamples.reduce((sum,p)=>sum+Math.max(
-    Math.abs(p[0]-bg[0]),Math.abs(p[1]-bg[1]),Math.abs(p[2]-bg[2])
-  ),0)/Math.max(1,borderSamples.length);
-  if(borderNoise<14){
-    let sourceInk=0,rightInk=0,originalRightInk=0;
-    for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++){
-      const i=(yy*w+xx)*4;
-      if(delta(labelOriginal,i)>=42)sourceInk++;
-      if(xx>=w-edgeBand && yy>=2 && yy<h-2){
-        if(delta(bytes,i)>=48)rightInk++;
-        if(delta(labelOriginal,i)>=48)originalRightInk++;
-      }
+  const bg=[0,1,2].map(ch=>median(borderSamples.map(px=>px[ch])));
+  const borderNoise=borderSamples.reduce((sum,p)=>sum+Math.max(...p.map(
+    (v,ch)=>Math.abs(v-bg[ch]))),0)/Math.max(1,borderSamples.length);
+  // Only screen image regions with a stable flat perimeter. Textured images
+  // must not fail from hatch marks; all other preservation checks still run.
+  if(borderNoise<14&&detectNewRightEdgeInk(labelOriginal,bytes,w,h,bg)){
+    if(attempt===0){
+      console.warn('image right-edge clipping retry',JSON.stringify({width:w,height:h}));
+      return reviseDesignRegion(sourceBuffer,selection,
+        instruction+' CRITICAL: Place any newly drawn detail fully inside the selected region. Keep a clear right margin; preserve existing content and image texture.',1);
     }
-    // Do not flag an original label that already touches the chosen border.
-    // A newly created, substantial edge contact is evidence of clipping.
-    if(sourceInk>=Math.max(4,Math.floor(w*h*.012)) && sourceInk<w*h*.45 &&
-       rightInk>=Math.max(3,Math.ceil(h*.09)) &&
-       rightInk>originalRightInk+Math.max(2,Math.ceil(h*.04))){
-      if(attempt===0){
-        console.warn('image right-edge clipping retry',JSON.stringify({width:w,height:h,rightInk,originalRightInk}));
-        return reviseDesignRegion(sourceBuffer,selection,
-          instruction+' CRITICAL: Place every replaced glyph entirely within the selected box. Leave clear space at its RIGHT boundary; do not clip the final digit or Korean character. Keep source glyph size, baseline, and background unchanged.',1);
-      }
-      throw new Error('수정한 글자가 선택 영역 오른쪽 경계에서 잘릴 위험이 있어. 원본을 유지했어. 다음 시도에서는 오른쪽 여백까지 더 넓게 선택해 줘.');
-    }
+    throw new Error('수정 결과가 오른쪽 경계에 닿아 잘릴 수 있어. 원본을 유지했어.');
   }
   let mismatch=assessLabelConsistency(labelOriginal,bytes,w,h);
   // These are INK metrics, not the height/width of the user selection.
