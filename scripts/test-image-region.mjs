@@ -459,7 +459,7 @@ try{
     if(method==='sendMessage')notices.push(payload);
     return {ok:true};
   };
-  const menu=createPhotoAdminMenu(adminOps,adminTelegram,async()=>{});
+  const menu=createPhotoAdminMenu(adminOps,adminTelegram,async(chat,text)=>notices.push({chat_id:chat,text}));
   const press=(data)=>menu.handle({callback_query:{id:'mock',from:{id:17},
     data,message:{chat:{id:17,type:'private'}}}});
   await press('pa:users');
