@@ -4,7 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import sharp from 'sharp';
 import { createWorker } from 'tesseract.js';
-import { reviseDesignRegion, editWholeImage, interpretImageRequest } from './ai-image-design.js';
+import { reviseDesignRegion, editWholeImage, interpretImageRequest, measurePrintedNameMetrics } from './ai-image-design.js';
 import { replaceTextStrict } from './strict-text-replace.js';
 import { createImageCredits } from './image-credits.js';
 import { createPhotoAdminMenu } from './photo-admin-menu.js';
@@ -92,6 +92,7 @@ export function canFallbackToContextualTextEdit(reason){
   return [
     '원본 배경 무늬를 정확하게 복원할 근거가 부족해',
     '원본 글씨체와 일치하는 서체를 찾지 못했어',
+    '새 문구의 실제 글자 높이를 원본과 맞출 수 없어',
     '기존 글자와 배경을 확실하게 구분할 수 없어',
   ].some(fragment=>String(reason||'').includes(fragment));
 }
@@ -108,7 +109,23 @@ async function replaceSelectedText(buf,selection,from,to){
     if(!canFallbackToContextualTextEdit(reason))throw error;
     console.info('strict renderer unavailable; using contextual text editor',
       JSON.stringify({width:textSelection.w,height:textSelection.h,reason:reason.slice(0,120)}));
-    return reviseDesignRegion(buf,textSelection,buildCharacterSafeEditInstruction(from,to,textSelection));
+    let preciseHeight='';
+    try {
+      const area=await sharp(buf).rotate().extract({
+        left:textSelection.x,top:textSelection.y,
+        width:textSelection.w,height:textSelection.h
+      }).ensureAlpha().raw().toBuffer();
+      const metrics=measurePrintedNameMetrics(area,textSelection.w,textSelection.h);
+      if(metrics&&metrics.height>=10){
+        preciseHeight=' THE ORIGINAL NAME INK IS EXACTLY '+metrics.height+
+          ' PIXELS HIGH IN THE UPLOADED IMAGE. The replacement must be '+metrics.height+
+          ' pixels high (allow 1 pixel of antialiasing). Do not use the selection rectangle height as font size.';
+      }
+    }catch(err){
+      console.info('source name scale measurement skipped',String(err?.message||err).slice(0,100));
+    }
+    return reviseDesignRegion(buf,textSelection,
+      buildCharacterSafeEditInstruction(from,to,textSelection)+preciseHeight);
   }
 }
 const token = process.env.IMAGE_BOT_TOKEN;
