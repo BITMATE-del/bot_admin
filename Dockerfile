@@ -9,6 +9,6 @@ COPY public ./public
 COPY scripts/test-image-region.mjs ./scripts/test-image-region.mjs
 COPY scripts/install-fonts.mjs ./scripts/install-fonts.mjs
 RUN node ./scripts/install-fonts.mjs && fc-cache -f
-RUN node ./scripts/test-image-region.mjs
+RUN REQUIRE_CURATED_FONTS=1 node ./scripts/test-image-region.mjs
 EXPOSE 3000
 CMD ["node","src/server.js"]
