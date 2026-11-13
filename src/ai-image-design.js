@@ -802,7 +802,10 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
     (v,ch)=>Math.abs(v-bg[ch]))),0)/Math.max(1,borderSamples.length);
   // Only screen image regions with a stable flat perimeter. Textured images
   // must not fail from hatch marks; all other preservation checks still run.
-  if(borderNoise<14&&detectNewRightEdgeInk(labelOriginal,bytes,w,h,bg)){
+  // Do not run text-glyph clipping QA on non-text edits such as graphical
+  // retouching; the mock's colored block should remain a valid image change.
+  const isTextEdit=/\\b(text|label|font|letter|digit|number|name)\\b|글자|문구|텍스트|숫자|한글/i.test(instruction);
+  if(isTextEdit&&borderNoise<14&&detectNewRightEdgeInk(labelOriginal,bytes,w,h,bg)){
     if(attempt===0){
       console.warn('image right-edge clipping retry',JSON.stringify({width:w,height:h}));
       return reviseDesignRegion(sourceBuffer,selection,
