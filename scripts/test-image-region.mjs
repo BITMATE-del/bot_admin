@@ -507,6 +507,23 @@ try{
   const shared=await sendAdminReviewCopies(reviewOps,'99',source,reviewImage,true);
   assert.equal(shared.sent,2,'Each active admin receives the two files');
   assert.deepEqual(calls,['17','42'],"Never resend the user's own files as an admin copy");
+  // Financial alerts distinguish a new payment request from a real confirmed
+  // deposit. The request must NEVER be misrepresented as paid.
+  const {formatRechargeAdminNotice}=await import('../src/photo-admin.js');
+  const charge={uid:'987654321',id:51,name:'이용권 10매',credits:10,
+    payment_asset:'USDT',payment_amount:'25.558'};
+  const pendingNotice=formatRechargeAdminNotice('requested',charge);
+  assert.ok(pendingNotice.includes('신규 충전 신청'));
+  assert.ok(pendingNotice.includes('입금 대기 (미확인)'));
+  assert.ok(pendingNotice.includes('회원 UID: 987654321'));
+  assert.ok(pendingNotice.includes('주문 번호: #51'));
+  assert.ok(pendingNotice.includes('25.558 USDT'));
+  assert.ok(pendingNotice.includes('\n'));
+  assert.ok(!pendingNotice.includes('충전 완료'));
+  const paidNotice=formatRechargeAdminNotice('confirmed',{...charge,txid:'mock-tx'});
+  assert.ok(paidNotice.includes('TronGrid 입금 확정'));
+  assert.ok(paidNotice.includes('충전 완료'));
+  assert.ok(paidNotice.includes('거래 TXID: mock-tx'));
   console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
