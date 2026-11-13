@@ -419,9 +419,20 @@ async function normalizeFlatLabelHeight(original,edited,w,h){
     for(let channel=0;channel<3;channel++)ink[k+channel]=b.color[channel];
     ink[k+3]=intensity<9?0:opacity;
   }
-  const resized=await sharp(ink,{raw:{width:b.width,height:b.height,channels:4}})
-    .resize(b.width,a.height,{fit:'fill',kernel:'lanczos3'}).png().toBuffer();
-  const placeX=Math.round(a.cx-b.width/2),placeY=Math.round(a.cy-a.height/2);
+  // Resampling a glyph exactly at its ink bounds can suppress a
+  // one-pixel top/bottom terminal. Surround the raster by transparent guard
+  // rows before filtering, then crop the guards back off. This is a generic
+  // flat-label renderer fix, not a content-specific character replacement.
+  const guard=2;
+  const padded=await sharp(ink,{raw:{width:b.width,height:b.height,channels:4}})
+    .extend({top:guard,bottom:guard,left:0,right:0,
+      background:{r:0,g:0,b:0,alpha:0}}).png().toBuffer();
+  const scaled=await sharp(padded)
+    .resize(b.width,a.height+guard*2,{fit:'fill',kernel:'lanczos3'})
+    .extract({left:0,top:guard,width:b.width,height:a.height})
+    .png().toBuffer();
+  const resized=scaled;
+  const placeX=Math.round(a.cx-b.width/2),placeY=a.top;
   if(placeX<2||placeY<2||placeX+b.width>w-2||placeY+a.height>h-2)return null;
   const background=await sharp({create:{width:w,height:h,channels:4,
     background:{r:sourceBorder.bg[0],g:sourceBorder.bg[1],b:sourceBorder.bg[2],alpha:1}}})
