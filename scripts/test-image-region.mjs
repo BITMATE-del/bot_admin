@@ -230,6 +230,20 @@ try{
     'A smooth modern font must not pass as the original detailed serif face'
   );
   assert.equal(strictApiCalls,0,'Typography QA must not call the image-generation API');
+  // Protect the parenthesized suffix as pixels, not merely with AI text.
+  // The edit rectangle includes the name and Hanja; the name crop must stop
+  // BEFORE the suffix, so all suffix pixels are guaranteed unchanged.
+  const {isolateKoreanNameSelection}=await import('../src/image-bot.js');
+  const suffixSvg=Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="115"><rect width="320" height="115" fill="#e7e7e7"/><text x="15" y="60" font-size="24" font-family="Noto Serif CJK KR" fill="#363636">이용주(李應宙)</text></svg>');
+  const suffixSource=await sharp(suffixSvg).png().toBuffer();
+  const wideSelection={x:5,y:27,w:250,h:55};
+  const narrowed=await isolateKoreanNameSelection(suffixSource,wideSelection,'이용주','허연선');
+  assert.ok(narrowed.w<wideSelection.w*.68,
+    'Clear Korean name + Hanja suffix should exclude suffix from AI editing area');
+  assert.ok(narrowed.w>38,'Korean name edit area must still cover the full name');
+  const keepFull=await isolateKoreanNameSelection(suffixSource,wideSelection,'이용주','허연선님');
+  assert.deepEqual(keepFull,wideSelection,
+    'Never guess cropped spans for replacement words with different character count');
   // Hanja labels and terminal punctuation are out-of-scope immutable glyphs.
   // Regression: requesting a Korean-name replacement must preserve an
   // untouched Hanja parenthetical suffix including the rightmost ')'.
