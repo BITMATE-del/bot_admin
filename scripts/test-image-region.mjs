@@ -440,6 +440,42 @@ try{
   assert.ok(protectedLabel.includes('glyph HEIGHT in pixels'));
   assert.ok(protectedLabel.includes('editing boundaries, NOT target glyph dimensions'));
   assert.ok(!protectedLabel.includes('Replace the entire selected area'));
+  // Photo admin member list must remain usable with thousands of accounts:
+  // page navigation, search, and return from a member detail are independent.
+  const {createPhotoAdminMenu}=await import('../src/photo-admin-menu.js');
+  const notices=[];
+  const adminOps={
+    isAdmin:async()=>true,
+    overview:async()=>({total:12000,blocked:0,used:0,pending:0}),
+    users:async(_actor,q,page)=>({
+      items:Array.from({length:8},(_,i)=>({
+        uid:String(1000000+page*8+i),display_name:'테스트'+i,username:'mock'+i,is_blocked:false
+      })),total:q?24:12000,pages:q?3:1500,page,pageSize:8
+    }),
+    user:async(_actor,uid)=>({uid,display_name:'테스트',username:'mock',
+      trial_left:1,paid_left:2,used:0,is_blocked:false})
+  };
+  const adminTelegram=async(method,payload)=>{
+    if(method==='sendMessage')notices.push(payload);
+    return {ok:true};
+  };
+  const menu=createPhotoAdminMenu(adminOps,adminTelegram,async()=>{});
+  const press=(data)=>menu.handle({callback_query:{id:'mock',from:{id:17},
+    data,message:{chat:{id:17,type:'private'}}}});
+  await press('pa:users');
+  assert.ok(notices.at(-1).reply_markup.inline_keyboard.some(row=>
+    row.some(b=>b.callback_data==='pa:page:1')),
+    'First member page must contain next-page navigation');
+  await press('pa:page:1');
+  assert.match(notices.at(-1).text,/2 \/ 1500페이지/,
+    'Member pagination must retain the requested page');
+  await press('pa:user:1000008');
+  await press('pa:backusers');
+  assert.match(notices.at(-1).text,/2 \/ 1500페이지/,
+    'Returning from member detail must retain prior page');
+  await press('pa:find');
+  assert.match(notices.at(-1).text,/검색할 UID/,
+    'The member search button must request a query');
   console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
