@@ -4,17 +4,47 @@ import {createTronGridSettlement} from './trongrid-settlement.js';
 import crypto from 'node:crypto';
 const safeUid=value=>/^\d{1,19}$/.test(String(value||''))?String(value):null;
 
+// A purchase request is not an on-chain deposit. Keep the two states distinct.
+export function formatRechargeAdminNotice(stage,order){
+ const uid=String(order.uid||'');
+ const id=String(order.id||'');
+ const credits=Number(order.credits||0);
+ const asset=order.payment_asset==='TRX'?'TRX':'USDT';
+ const quantity=String(order.payment_amount||'');
+ const lines=stage==='confirmed'?
+  ['✅ 충전 완료 · 자동 지급','상태: TronGrid 입금 확정']:
+  ['🔔 신규 충전 신청','상태: 입금 대기 (미확인)'];
+ lines.push('회원 UID: '+uid,'주문 번호: #'+id,
+   '상품: '+String(order.name||order.package_name||'이용권'),
+   '이용권: '+credits+'매',
+   '입금 수량: '+quantity+' '+asset);
+ if(stage==='confirmed'&&order.txid)lines.push('거래 TXID: '+String(order.txid));
+ return lines.join('\\n');
+}
 export function mountPhotoAdmin(app,pool){
  const credits=createImageCredits(pool);
  const telegramAdmin=createPhotoAdminOps(pool);
- const watcher=createTronGridSettlement(pool,async(uid,text)=>{
+ const sendNotification=async(uid,text)=>{
   const token=process.env.IMAGE_BOT_TOKEN;
   if(!token)return;
   const resp=await fetch('https://api.telegram.org/bot'+token+'/sendMessage',{
    method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({chat_id:uid,text}),signal:AbortSignal.timeout(12000)});
   if(!resp.ok)throw Error('Telegram notify HTTP '+resp.status);
- });
+  const json=await resp.json();
+  if(json.ok!==true)throw Error('Telegram notify failed: '+String(json.description||'UNKNOWN'));
+ };
+ // Financial notices include order metadata only; never forward a member's
+ // uploaded images or personal documents as part of a recharge notification.
+ // Only administrators currently authorized in this bot receive alerts.
+ const notifyAdmins=async text=>{
+  const recipients=await telegramAdmin.imageReviewRecipients();
+  const results=await Promise.allSettled(recipients.map(uid=>sendNotification(uid,text)));
+  const failures=results.filter(x=>x.status==='rejected');
+  if(failures.length)console.error('Admin recharge notifications failed:',failures.length,'of',results.length);
+  return {sent:results.length-failures.length,failed:failures.length};
+ };
+ const watcher=createTronGridSettlement(pool,sendNotification,notifyAdmins);
  const ensure=async(uid)=>pool.query('INSERT INTO image_credit_accounts(uid,trial_total) VALUES($1,$2) ON CONFLICT(uid) DO NOTHING',[uid,trialCredits]);
  // Checkout must create the credit account in its OWN transaction; using an
  // undefined helper previously rejected every USDT/TRX purchase before an
@@ -177,10 +207,16 @@ export function mountPhotoAdmin(app,pool){
    }
    if(!result)throw Error('고유 입금 수량 발급에 실패했습니다. 다시 시도해 주세요.');
    await c.query('COMMIT');
-   return {id:result.rows[0].id,credits:pack.credits,name:pack.name,price_usdt:usdt,
+   const created={id:result.rows[0].id,credits:pack.credits,name:pack.name,price_usdt:usdt,
      payment_asset:asset,payment_amount:amount,payment_address:address,
      expires_at:new Date(Date.now()+24*3600000).toISOString(),
      instructions:shop.payment_instructions||''};
+   // Alert only on a NEW committed order, not when a pending invoice is
+   // displayed again. Delivery errors must never cancel a valid checkout.
+   try{
+    await notifyAdmins(formatRechargeAdminNotice('requested',{uid,...created}));
+   }catch(e){console.error('New recharge admin alert:',e.message);}
+   return created;
   }catch(e){await c.query('ROLLBACK').catch(()=>{});console.error('photo shop checkout failed:',{code:e.code||null,message:e.message,constraint:e.constraint||null});throw e;}finally{c.release();}
  }
  async function ordersFor(uid){
