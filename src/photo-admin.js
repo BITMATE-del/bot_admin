@@ -19,7 +19,7 @@ export function formatRechargeAdminNotice(stage,order){
    '이용권: '+credits+'매',
    '입금 수량: '+quantity+' '+asset);
  if(stage==='confirmed'&&order.txid)lines.push('거래 TXID: '+String(order.txid));
- return lines.join('\\n');
+ return lines.join('\n');
 }
 export function mountPhotoAdmin(app,pool){
  const credits=createImageCredits(pool);
