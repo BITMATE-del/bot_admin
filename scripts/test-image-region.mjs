@@ -337,6 +337,17 @@ try{
   console.info('protected Hanja suffix identical pixels',JSON.stringify({
     fromX:wideSelection.x+narrowed.w,width:wideSelection.w-narrowed.w
   }));
+  // A typical user crop ends on the closing ')', not after generous
+  // whitespace. Still isolate only the name; do not make the user reselect.
+  const tightSuffixSelection={x:5,y:27,w:176,h:55};
+  const tightResult=await isolateKoreanNameSelection(
+    suffixSource,tightSuffixSelection,'이용주','허연선');
+  console.info('tight parenthesized suffix isolation',JSON.stringify({
+    input:tightSuffixSelection,result:tightResult
+  }));
+  assert.ok(tightResult.w<tightSuffixSelection.w-24,
+    'Name crop must exclude Hanja even if the original suffix touches the right edge');
+  assert.ok(tightResult.w>38,'Tight name crop must still include Korean letters');
   const keepFull=await isolateKoreanNameSelection(suffixSource,wideSelection,'이용주','허연선님');
   assert.deepEqual(keepFull,wideSelection,
     'Never guess cropped spans for replacement words with different character count');
