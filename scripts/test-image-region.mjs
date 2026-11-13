@@ -136,21 +136,24 @@ try{
     if(changed){strictChanged++;assert.ok(inside,'Strict renderer changed an outside pixel');}
   }
   assert.ok(strictChanged>20,'Strict render should modify text');
-  // A faint 2px outline around the OLD text must be erased before the
-  // target is printed; it must not become a second ghost layer.
-  const haloSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><rect width="280" height="140" fill="#fff"/><text x="140" y="76" font-family="Noto Serif CJK KR" font-size="38" stroke="#dedede" stroke-width="4" paint-order="stroke" fill="#191919" text-anchor="middle">박정현</text></svg>');
-  const haloSource=await sharp(haloSvg).png().toBuffer();
-  const haloOutput=await replaceTextStrict(haloSource,strictRect,'박정현','바');
-  const cleanReference=await replaceTextStrict(strictSource,strictRect,'박정현','바');
-  const cleanOutput=await sharp(cleanReference).ensureAlpha().raw().toBuffer();
-  const haloData=await sharp(haloOutput).ensureAlpha().raw().toBuffer();
-  let haloDifference=0,haloPixels=0;
-  for(let py=40;py<89;py++)for(let px=35;px<245;px++){
-    const k=(py*280+px)*4;
-    for(let ch=0;ch<3;ch++){haloDifference+=Math.abs(haloData[k+ch]-cleanOutput[k+ch]);haloPixels++;}
+  // Unit regression: faint anti-aliased old glyph near a dark stroke is
+  // restored, but unrelated patterned/gray background pixels remain unchanged.
+  const {restoreOldGlyphHalos}=await import('../src/strict-text-replace.js');
+  const hw=30,hh=20,hregion=Buffer.alloc(hw*hh*4,255);
+  const hm=new Uint8Array(hw*hh),hs=new Uint8Array(hw*hh);
+  const darkIndex=10*hw+10,ghostIndex=10*hw+13,backgroundIndex=15*hw+25;
+  for(let ch=0;ch<3;ch++){
+    hregion[darkIndex*4+ch]=15;
+    hregion[ghostIndex*4+ch]=220;
+    hregion[backgroundIndex*4+ch]=220;
   }
-  assert.ok(haloDifference/haloPixels<5,
-    'Light anti-aliased old glyph outlines must not survive as a second text layer');
+  hm[darkIndex]=1;
+  hs[darkIndex]=240;hs[ghostIndex]=35;hs[backgroundIndex]=35;
+  const restoredResult=restoreOldGlyphHalos(hregion,hm,hs,{at:()=>[255,255,255]},hw,hh);
+  assert.ok(restoredResult.restored>=2,'Old dark stroke and its faint ghost should be restored');
+  assert.equal(restoredResult.base[ghostIndex*4],255,'Faint old text remnant must be erased');
+  assert.equal(restoredResult.base[backgroundIndex*4],220,'Unrelated background texture must remain intact');
+  assert.equal(hregion[ghostIndex*4],220,'Original input pixels must never be mutated');
   const texturedSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 8L8 -2M2 10L10 2" stroke="#b7b7b7" stroke-width="2"/></pattern></defs><rect width="280" height="140" fill="#ddd"/><rect width="280" height="140" fill="url(#p)"/><text x="140" y="76" font-size="38" fill="#151515" text-anchor="middle">박정현</text></svg>');
   const texturedSource=await sharp(texturedSvg).png().toBuffer();
   const texturedEdited=await replaceTextStrict(texturedSource,strictRect,'박정현','바구리');
