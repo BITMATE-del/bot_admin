@@ -817,6 +817,8 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       const output=await replaceSelectedText(job.buf,{x,y,w:right-x,h:bottom-y},job.change.from,job.change.to);
       await sendOriginalAndEdit(job.chatId,job.buf,output);
       await credits.consume(creditId);
+      await sendAdminReviewCopies(commerce.telegramAdmin,job.uid||cb.from.id,
+        job.buf,output,job.adminShare).catch(console.error);
       await sendBalance(job.chatId,cb.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
     } catch(error) {
       await credits.release(creditId).catch(console.error);
@@ -894,6 +896,8 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       const result=await editWholeImage(saved.buf,instruction);
       await sendOriginalAndEdit(chatId,saved.buf,result);
       await credits.consume(creditId);
+      await sendAdminReviewCopies(commerce.telegramAdmin,msg.from.id,
+        saved.buf,result,saved.adminShare).catch(console.error);
       await sendBalance(chatId,msg.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
     } catch(e) {
       await credits.release(creditId).catch(console.error);
@@ -1045,6 +1049,8 @@ export function mountImageBot(app,base,pool,commerce){
         await credits.consume(creditId);
         job.state='done';
         await setTemporaryJobState(pool,job.id,'done');
+        await sendAdminReviewCopies(commerce.telegramAdmin,job.uid,
+          job.buf,output,job.adminShare).catch(console.error);
         await sendBalance(job.chatId,job.uid,credits,'편집 완료 · 남은 이용권').catch(console.error);
         if(job.startedAt){
           const secs=Math.max(1,Math.round((Date.now()-job.startedAt)/1000));
