@@ -362,7 +362,7 @@ export function assessTexturedInkStrokeContrast(original,edited,w,h){
 // redraw the typography. Only run on isolated lettering over a nearly flat
 // background; anything textured, clipped, too distorted or ambiguous fails
 // closed. This never changes pixels outside the user's selected rectangle.
-async function normalizeFlatLabelHeight(original,edited,w,h){
+export async function normalizeFlatLabelHeight(original,edited,w,h){
   if(w<25||h<15||original.length!==edited.length)return null;
   const median=values=>{values.sort((a,b)=>a-b);return values[Math.floor(values.length/2)];};
   const border=bytes=>{
