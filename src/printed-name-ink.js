@@ -115,3 +115,58 @@ export function normalizePrintedNameInk(original,edited,w,h,sourceMetrics,result
   return {bytes:out,before:resultMetrics.height,after:sourceMetrics.height,
     filled:bgCache.size,originalHeight:sourceMetrics.height};
 }
+
+// Match replacement ink to the source print tone WITHOUT resizing glyphs,
+// touching alpha, changing the paper or recompositing the text. This is
+// intentionally limited to the selected name rectangle (not adjacent Hanja).
+export function matchPrintedNameInkTone(original,edited,w,h,sourceMetrics,resultMetrics){
+  if(!sourceMetrics||!resultMetrics||w<24||h<12||
+      original.length<w*h*4||edited.length<w*h*4)return null;
+  const sourcePaper=sourceMetrics.paper;
+  const resultPaper=resultMetrics.paper;
+  if(!Number.isFinite(sourcePaper)||!Number.isFinite(resultPaper)||
+      sourcePaper<160||resultPaper<160||Math.abs(sourcePaper-resultPaper)>28)return null;
+  const collect=(pixels,bbox,paper)=>{
+    const channels=[[],[],[]];
+    const minX=Math.max(1,bbox.left),maxX=Math.min(w-2,bbox.right);
+    const minY=Math.max(1,bbox.top),maxY=Math.min(h-2,bbox.bottom);
+    for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++){
+      const k=(y*w+x)*4;
+      const rgb=[pixels[k],pixels[k+1],pixels[k+2]];
+      const mean=(rgb[0]+rgb[1]+rgb[2])/3;
+      if(mean>paper-58)continue; // solid print core, not textured paper
+      for(let ch=0;ch<3;ch++)channels[ch].push(rgb[ch]);
+    }
+    if(channels[0].length<Math.max(10,Math.ceil(bbox.width*bbox.height*.025)))return null;
+    return channels.map(samples=>{
+      samples.sort((a,b)=>a-b);
+      return samples[Math.floor(samples.length*.35)];
+    });
+  };
+  const sourceCore=collect(original,sourceMetrics,sourcePaper);
+  const editedCore=collect(edited,resultMetrics,resultPaper);
+  if(!sourceCore||!editedCore)return null;
+  // Only reduce excessive darkness. Never add contrast or force pitch black.
+  const lift=sourceCore.map((v,ch)=>clamp(v-editedCore[ch],0,38));
+  const maxLift=Math.max(...lift);
+  if(maxLift<4)return null;
+  const out=Uint8Array.from(edited);
+  let corrected=0;
+  const left=Math.max(2,resultMetrics.left),right=Math.min(w-3,resultMetrics.right);
+  const top=Math.max(2,resultMetrics.top),bottom=Math.min(h-3,resultMetrics.bottom);
+  for(let y=top;y<=bottom;y++)for(let x=left;x<=right;x++){
+    const k=(y*w+x)*4;
+    const avg=(edited[k]+edited[k+1]+edited[k+2])/3;
+    const darkness=resultPaper-avg;
+    // Feather at the letter's antialiased border; untouched background
+    // (including hatching and scan grain) stays byte-for-byte identical.
+    if(darkness<22)continue;
+    const strength=clamp((darkness-20)/60,0,1);
+    for(let ch=0;ch<3;ch++){
+      const v=edited[k+ch];
+      out[k+ch]=Math.min(255,Math.round(v+lift[ch]*strength));
+    }
+    corrected++;
+  }
+  return corrected?{bytes:out,sourceCore,editedCore,lift,corrected}:null;
+}
