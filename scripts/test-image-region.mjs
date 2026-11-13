@@ -255,6 +255,16 @@ try{
   const keepFull=await isolateKoreanNameSelection(suffixSource,wideSelection,'이용주','허연선님');
   assert.deepEqual(keepFull,wideSelection,
     'Never guess cropped spans for replacement words with different character count');
+  const {canFallbackToContextualTextEdit}=await import('../src/image-bot.js');
+  assert.equal(canFallbackToContextualTextEdit(
+    '원본 글씨체와 일치하는 서체를 찾지 못했어. 다른 글꼴을 새로 만들어 적용하지 않았고 이용권도 차감하지 않아.'),true,
+    'Missing installed source font must NOT abort the edit');
+  assert.equal(canFallbackToContextualTextEdit(
+    '원본 배경 무늬를 정확하게 복원할 근거가 부족해.'),true,
+    'Background modeling failure must use existing AI editor');
+  assert.equal(canFallbackToContextualTextEdit(
+    '수정 영역을 정확하게 선택해 줘.'),false,
+    'Invalid user selection must not silently fall back');
   // Hanja labels and terminal punctuation are out-of-scope immutable glyphs.
   // Regression: requesting a Korean-name replacement must preserve an
   // untouched Hanja parenthetical suffix including the rightmost ')'.
