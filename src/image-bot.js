@@ -87,6 +87,14 @@ export function buildCharacterSafeEditInstruction(from,to,selection){
     'All punctuation and characters outside the requested substring remain exactly as in the original, even if located inside the selection rectangle.'
   ].join(' ');
 }
+// A font-matching heuristic must never prevent ordinary text editing.
+export function canFallbackToContextualTextEdit(reason){
+  return [
+    '원본 배경 무늬를 정확하게 복원할 근거가 부족해',
+    '원본 글씨체와 일치하는 서체를 찾지 못했어',
+    '기존 글자와 배경을 확실하게 구분할 수 없어',
+  ].some(fragment=>String(reason||'').includes(fragment));
+}
 async function replaceSelectedText(buf,selection,from,to){
   const textSelection=await isolateKoreanNameSelection(buf,selection,from,to);
   try{
@@ -97,12 +105,7 @@ async function replaceSelectedText(buf,selection,from,to){
     // printed face, use the previously working contextual editor instead.
     // Preserve true input/selection failures and don't swallow API failures.
     const reason=String(error?.message||'');
-    const fallbackReasons=[
-      '원본 배경 무늬를 정확하게 복원할 근거가 부족해',
-      '원본 글씨체와 일치하는 서체를 찾지 못했어',
-      '기존 글자와 배경을 확실하게 구분할 수 없어',
-    ];
-    if(!fallbackReasons.some(text=>reason.includes(text)))throw error;
+    if(!canFallbackToContextualTextEdit(reason))throw error;
     console.info('strict renderer unavailable; using contextual text editor',
       JSON.stringify({width:textSelection.w,height:textSelection.h,reason:reason.slice(0,120)}));
     return reviseDesignRegion(buf,textSelection,buildCharacterSafeEditInstruction(from,to,textSelection));
