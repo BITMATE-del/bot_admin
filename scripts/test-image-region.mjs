@@ -506,7 +506,7 @@ try{
   };
   const shared=await sendAdminReviewCopies(reviewOps,'99',source,reviewImage,true);
   assert.equal(shared.sent,2,'Each active admin receives the two files');
-  assert.deepEqual(calls,['17','42'],'Never resend the user's own files to them as an admin copy');
+  assert.deepEqual(calls,['17','42'],"Never resend the user's own files as an admin copy");
   console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
