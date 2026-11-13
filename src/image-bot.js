@@ -92,9 +92,19 @@ async function replaceSelectedText(buf,selection,from,to){
   try{
     return await replaceTextStrict(buf,textSelection,from,to);
   }catch(error){
-    if(!String(error?.message||'').includes('원본 배경 무늬를 정확하게 복원할 근거가 부족해'))throw error;
-    console.info('strict background model unavailable; using previously working contextual editor',
-      JSON.stringify({width:selection.w,height:selection.h}));
+    // Source-matching fonts are a quality preference, NOT permission to block
+    // all editing. If the installed font set cannot reproduce an unusual
+    // printed face, use the previously working contextual editor instead.
+    // Preserve true input/selection failures and don't swallow API failures.
+    const reason=String(error?.message||'');
+    const fallbackReasons=[
+      '원본 배경 무늬를 정확하게 복원할 근거가 부족해',
+      '원본 글씨체와 일치하는 서체를 찾지 못했어',
+      '기존 글자와 배경을 확실하게 구분할 수 없어',
+    ];
+    if(!fallbackReasons.some(text=>reason.includes(text)))throw error;
+    console.info('strict renderer unavailable; using contextual text editor',
+      JSON.stringify({width:textSelection.w,height:textSelection.h,reason:reason.slice(0,120)}));
     return reviseDesignRegion(buf,textSelection,buildCharacterSafeEditInstruction(from,to,textSelection));
   }
 }
