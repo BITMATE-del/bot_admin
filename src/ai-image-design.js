@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import {normalizePrintedNameInk} from './printed-name-ink.js';
+import {normalizePrintedNameInk,matchPrintedNameInkTone} from './printed-name-ink.js';
 
 const API = 'https://api.openai.com/v1/images/edits';
 const ALLOWED = new Set(['gpt-image-2.6-sunburst','gpt-image-2.6-flare','gpt-image-2.5-sunburst','gpt-image-2.5-flare','gpt-image-2']);
@@ -836,6 +836,23 @@ export async function reviseDesignRegion(sourceBuffer,selection,instruction,atte
             correctedHeight:checked?.height??null
           }));
         }
+      }
+    }
+  }
+  // Match gray/black ink ONLY after glyph-height correction. Do not change
+  // target font size, baseline, paper RGB or suffix/hangul outside the user's
+  // selected name rectangle. Safe no-op if no reliable printed-ink sample.
+  if(!mismatch&&instruction.includes('STRICT TEXT SUBSTITUTION')){
+    const sourceName=measurePrintedNameMetrics(labelOriginal,w,h);
+    const editedName=measurePrintedNameMetrics(bytes,w,h);
+    if(sourceName&&editedName&&sourceName.height>=10){
+      const toned=matchPrintedNameInkTone(labelOriginal,bytes,w,h,sourceName,editedName);
+      if(toned){
+        bytes.set(toned.bytes);
+        console.info('AI printed name ink tone matched',JSON.stringify({
+          sourceInk:toned.sourceCore,generatedInk:toned.editedCore,
+          rgbLift:toned.lift,pixels:toned.corrected,width:w,height:h
+        }));
       }
     }
   }
