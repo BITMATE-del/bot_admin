@@ -14,6 +14,25 @@ import { createPhotoAdminMenu } from './photo-admin-menu.js';
 // model a background must NOT prevent the user from editing as before.
 // Never swallow unrelated errors or silently use a different font on a flat
 // background. The older path retains its typography/placement QA.
+// Construct a character-complete replacement request. Many labels contain
+// supplementary Hanja and a final ')' outside the user-typed source string.
+// Those neighboring glyphs must NEVER be treated as part of the replacement.
+export function buildCharacterSafeEditInstruction(from,to,selection){
+  const original=JSON.stringify(String(from));
+  const replacement=JSON.stringify(String(to));
+  const complete=s=>Array.from(String(s)).length;
+  return [
+    'STRICT TEXT SUBSTITUTION. Replace exactly '+original+' with exactly '+replacement+'.',
+    'The source substring contains '+complete(from)+' Unicode characters and the new substring contains '+complete(to)+' characters.',
+    'EVERY other printed character in the image is immutable, including both parentheses ( and ), brackets, commas, periods, spaces, Korean, Hanja, and punctuation.',
+    'If the original label contains a parenthesized Hanja name, retain BOTH the opening ( and closing ) and all Hanja characters unless explicitly present in the requested source substring.',
+    'In particular NEVER omit, erase, crop, rewrite, or invent the rightmost closing parenthesis ). Even if it is near the selected region boundary, keep it identical to the uploaded image.',
+    'PRESERVE SOURCE GLYPH SIZE: retain original text glyph HEIGHT in pixels, thin stroke weight, baseline, spacing and scale. Fit longer text by natural horizontal width within the selection, NOT by increasing font-size, vertically stretching letters, or reducing unrelated text.',
+    'Preserve the existing patterned background, print texture, muted original ink color and stroke contrast. Remove only ghosts from the old replaced substring; never leave overlapping text or a second text layer.',
+    'The user-selected region is approximately '+selection.w+' pixels wide and '+selection.h+' pixels high. These are editing boundaries, NOT target glyph dimensions. Do not fill the rectangle with enlarged text.',
+    'All punctuation and characters outside the requested substring remain exactly as in the original, even if located inside the selection rectangle.'
+  ].join(' ');
+}
 async function replaceSelectedText(buf,selection,from,to){
   try{
     return await replaceTextStrict(buf,selection,from,to);
@@ -21,10 +40,7 @@ async function replaceSelectedText(buf,selection,from,to){
     if(!String(error?.message||'').includes('원본 배경 무늬를 정확하게 복원할 근거가 부족해'))throw error;
     console.info('strict background model unavailable; using previously working contextual editor',
       JSON.stringify({width:selection.w,height:selection.h}));
-    return reviseDesignRegion(buf,selection,
-      'Replace ONLY the exact original text '+JSON.stringify(from)+
-      ' with '+JSON.stringify(to)+
-      '. Preserve the existing patterned background, print texture, original ink stroke contrast, font family, glyph height, baseline and horizontal center. IMPORTANT: retain the original LIGHT, THIN stroke weight and natural muted ink opacity; never bolden, darken, thicken, sharpen, or boost contrast of the replacement characters. Remove only faint ghost remnants of the OLD letters before rendering the new letters once, without repainting the patterned background. Keep the original subtle antique printed appearance; do not invent a new font or redesign the image.');
+    return reviseDesignRegion(buf,selection,buildCharacterSafeEditInstruction(from,to,selection));
   }
 }
 const token = process.env.IMAGE_BOT_TOKEN;
