@@ -557,7 +557,7 @@ async function showPhotoHome(chatId,uid,adminMenu){
 // the payment watcher requires an exact chain amount for auto-credit.
 export function displayExactPaymentAmount(amount){
  const value=String(amount);
- const matched=/^(\\d+)(?:\\.(\\d{1,6}))?$/.exec(value);
+ const matched=/^(\d+)(?:\.(\d{1,6}))?$/.exec(value);
  if(!matched)return value;
  const fraction=(matched[2]||'').padEnd(6,'0');
  return fraction.slice(3)==='000'
