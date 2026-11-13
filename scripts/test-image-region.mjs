@@ -258,6 +258,21 @@ try{
   console.info('name pixel metric regression',JSON.stringify({before:m1,after:m2}));
   assert.ok(m1&&m2&&m2.height>=m1.height+4,
     'Printed glyph metric must see a 19px -> 27px name enlargement');
+  const {normalizePrintedNameInk}=await import('../src/printed-name-ink.js');
+  const resizedName=normalizePrintedNameInk(smallName,largeName,190,78,m1,m2);
+  assert.ok(resizedName,'Oversized AI name should be correctable on neutral printed paper');
+  const adjusted=measurePrintedNameMetrics(resizedName.bytes,190,78);
+  console.info('printed AI name scaling test',JSON.stringify({
+    original:m1.height,generated:m2.height,corrected:adjusted?.height
+  }));
+  assert.ok(adjusted&&Math.abs(adjusted.height-m1.height)<=1,
+    'AI generated Hangul text should be normalized to original ink pixel height');
+  // The background outside the local old printed-name area is never changed.
+  for(let y=0;y<78;y++)for(let x=120;x<190;x++){
+    const i=(y*190+x)*4;
+    assert.equal(resizedName.bytes[i],largeName[i],
+      'Raster scale correction may not modify unaffected paper background');
+  }
   // Protect the parenthesized suffix as pixels, not merely with AI text.
   // The edit rectangle includes the name and Hanja; the name crop must stop
   // BEFORE the suffix, so all suffix pixels are guaranteed unchanged.
