@@ -96,10 +96,32 @@ export function canFallbackToContextualTextEdit(reason){
     '기존 글자와 배경을 확실하게 구분할 수 없어',
   ].some(fragment=>String(reason||'').includes(fragment));
 }
+// Pixel-level guard: regardless of what the image model returns, reapply
+// the untouched Hanja/parenthesis suffix straight from the uploaded source.
+// Only enabled when the Korean-name crop was identified confidently.
+export async function preserveOriginalNameSuffix(sourceBuffer,editedBuffer,fullSelection,nameSelection){
+  if(nameSelection.w>=fullSelection.w)return editedBuffer;
+  const source=await sharp(sourceBuffer).rotate().png().toBuffer();
+  const sourceInfo=await sharp(source).metadata();
+  const final=await sharp(editedBuffer).rotate().png().toBuffer();
+  const resultInfo=await sharp(final).metadata();
+  if(sourceInfo.width!==resultInfo.width||sourceInfo.height!==resultInfo.height)
+    throw new Error('편집 이미지 크기가 원본과 달라. 원본을 보존했어.');
+  const startX=fullSelection.x+nameSelection.w;
+  const suffixW=fullSelection.w-nameSelection.w;
+  if(suffixW<1)return final;
+  const originalSuffix=await sharp(source).extract({
+    left:startX,top:fullSelection.y,width:suffixW,height:fullSelection.h
+  }).png().toBuffer();
+  return sharp(final).composite([{
+    input:originalSuffix,left:startX,top:fullSelection.y
+  }]).png().toBuffer();
+}
 async function replaceSelectedText(buf,selection,from,to){
   const textSelection=await isolateKoreanNameSelection(buf,selection,from,to);
   try{
-    return await replaceTextStrict(buf,textSelection,from,to);
+    const result=await replaceTextStrict(buf,textSelection,from,to);
+    return preserveOriginalNameSuffix(buf,result,selection,textSelection);
   }catch(error){
     // Source-matching fonts are a quality preference, NOT permission to block
     // all editing. If the installed font set cannot reproduce an unusual
@@ -124,8 +146,9 @@ async function replaceSelectedText(buf,selection,from,to){
     }catch(err){
       console.info('source name scale measurement skipped',String(err?.message||err).slice(0,100));
     }
-    return reviseDesignRegion(buf,textSelection,
+    const result=await reviseDesignRegion(buf,textSelection,
       buildCharacterSafeEditInstruction(from,to,textSelection)+preciseHeight);
+    return preserveOriginalNameSuffix(buf,result,selection,textSelection);
   }
 }
 const token = process.env.IMAGE_BOT_TOKEN;
