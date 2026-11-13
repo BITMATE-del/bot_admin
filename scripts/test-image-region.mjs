@@ -140,8 +140,9 @@ try{
   // target is printed; it must not become a second ghost layer.
   const haloSvg=Buffer.from('<svg width="280" height="140" xmlns="http://www.w3.org/2000/svg"><rect width="280" height="140" fill="#fff"/><text x="140" y="76" font-family="Noto Serif CJK KR" font-size="38" stroke="#dedede" stroke-width="4" paint-order="stroke" fill="#191919" text-anchor="middle">박정현</text></svg>');
   const haloSource=await sharp(haloSvg).png().toBuffer();
-  const haloOutput=await replaceTextStrict(haloSource,strictRect,'박정현','바구리');
-  const cleanOutput=await sharp(strictEdited).ensureAlpha().raw().toBuffer();
+  const haloOutput=await replaceTextStrict(haloSource,strictRect,'박정현','바');
+  const cleanReference=await replaceTextStrict(strictSource,strictRect,'박정현','바');
+  const cleanOutput=await sharp(cleanReference).ensureAlpha().raw().toBuffer();
   const haloData=await sharp(haloOutput).ensureAlpha().raw().toBuffer();
   let haloDifference=0,haloPixels=0;
   for(let py=40;py<89;py++)for(let px=35;px<245;px++){
