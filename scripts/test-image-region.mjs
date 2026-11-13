@@ -184,6 +184,34 @@ try{
     /배경|서체|구분|글자/
   );
   assert.equal(strictApiCalls,0,'Strict replacement must never invoke AI');
+  // Regression for the user's issue: background stays byte-identical while a
+  // modern smooth font loses serif/brush tips. Detect typography regression,
+  // not background texture, without calling any image-generation endpoint.
+  const {assessTexturedInkStrokeContrast}=await import('../src/ai-image-design.js');
+  const fw=220,fh=100;
+  const serif=Buffer.alloc(fw*fh*4),sans=Buffer.alloc(fw*fh*4);
+  for(let py=0;py<fh;py++)for(let px=0;px<fw;px++){
+    const i=(py*fw+px)*4;
+    for(const buf of [serif,sans]){buf[i]=215;buf[i+1]=215;buf[i+2]=215;buf[i+3]=255;}
+  }
+  const draw=(buf,px,py)=>{
+    if(px<0||py<0||px>=fw||py>=fh)return;
+    const i=(py*fw+px)*4;buf[i]=18;buf[i+1]=18;buf[i+2]=18;
+  };
+  for(let y=13;y<80;y+=16)for(let x=9;x<205;x+=18){
+    for(let yy=y;yy<y+11;yy++)for(let xx=x;xx<x+10;xx++){
+      draw(serif,xx,yy);draw(sans,xx,yy);
+    }
+    // Fine ink terminals on the same text body; missing in modern sans.
+    for(let yy=y;yy<y+11;yy+=2)
+      for(const xx of [x-2,x-1,x+10,x+11])draw(serif,xx,yy);
+  }
+  assert.match(
+    assessTexturedInkStrokeContrast(serif,sans,fw,fh)||'',
+    /획 끝|윤곽|필체/,
+    'A smooth modern font must not pass as the original detailed serif face'
+  );
+  assert.equal(strictApiCalls,0,'Typography QA must not call the image-generation API');
   console.log('PASS: strict non-generative text, boundaries, isolated composite, text-style retry rejection, dimensions, and invalid selection');
 }finally{
   globalThis.fetch=originalFetch;
