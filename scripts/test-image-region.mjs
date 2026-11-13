@@ -266,6 +266,29 @@ try{
   assert.match(assessLabelConsistency(sourceLabel,shiftedLabel,tw,th)||'',
     /위아래 경계/,
     'A three-pixel vertical drift must not pass geometric QA');
+  // A detached accent/top stroke is a valid glyph feature. The generic
+  // height normalizer must retain it after antialiasing and resampling.
+  const {normalizeFlatLabelHeight}=await import('../src/ai-image-design.js');
+  const sw=70,sh=48;
+  const neutral=()=>new Uint8Array(sw*sh*4).fill(255);
+  const normal=neutral(),tall=neutral();
+  const rect=(bytes,x0,x1,y0,y1)=>{
+    for(let yy=y0;yy<=y1;yy++)for(let xx=x0;xx<=x1;xx++){
+      const k=(yy*sw+xx)*4;
+      bytes[k]=48;bytes[k+1]=48;bytes[k+2]=48;
+    }
+  };
+  rect(normal,29,40,15,15);rect(normal,22,46,19,32);
+  rect(tall,29,40,14,14);rect(tall,22,46,18,33);
+  const stabilized=await normalizeFlatLabelHeight(normal,tall,sw,sh);
+  assert.ok(stabilized,'Flat-label height correction must support a modest vertical mismatch');
+  let survivingTop=0;
+  for(let yy=14;yy<=16;yy++)for(let xx=29;xx<=40;xx++){
+    const k=(yy*sw+xx)*4;
+    if(stabilized[k]<175)survivingTop++;
+  }
+  assert.ok(survivingTop>=6,'Thin detached top stroke must survive height normalization');
+  console.info('generic thin-top-stroke retained',JSON.stringify({pixels:survivingTop}));
   // Generic right-edge clipping detection: unchanged punctuation should
   // never trigger a false alarm, while newly cut-off ink still fails.
   const {detectNewRightEdgeInk}=await import('../src/ai-image-design.js');
