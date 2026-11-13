@@ -248,6 +248,24 @@ try{
     'A smooth modern font must not pass as the original detailed serif face'
   );
   assert.equal(strictApiCalls,0,'Typography QA must not call the image-generation API');
+  // Non-document typography QA: check top/bottom separately, even when
+  // edited glyph height itself remains identical.
+  const {assessLabelConsistency}=await import('../src/ai-image-design.js');
+  const tw=70,th=40;
+  const sourceLabel=new Uint8Array(tw*th*4).fill(255);
+  const shiftedLabel=new Uint8Array(tw*th*4).fill(255);
+  const drawBar=(target,top)=>{
+    for(let yy=top;yy<top+14;yy++)for(let xx=15;xx<41;xx++){
+      const k=(yy*tw+xx)*4;
+      target[k]=55;target[k+1]=55;target[k+2]=55;
+    }
+  };
+  drawBar(sourceLabel,12);drawBar(shiftedLabel,15);
+  assert.equal(assessLabelConsistency(sourceLabel,sourceLabel,tw,th),null,
+    'Unchanged label geometry should pass');
+  assert.match(assessLabelConsistency(sourceLabel,shiftedLabel,tw,th)||'',
+    /위아래 경계/,
+    'A three-pixel vertical drift must not pass geometric QA');
   // Generic right-edge clipping detection: unchanged punctuation should
   // never trigger a false alarm, while newly cut-off ink still fails.
   const {detectNewRightEdgeInk}=await import('../src/ai-image-design.js');
