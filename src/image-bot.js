@@ -488,7 +488,7 @@ async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false,re
 }
 // Share only after explicit per-image consent. Never let an admin delivery
 // error affect user receipt, successful billing, or the editing job state.
-async function sendAdminReviewCopies(authorizedAdmins,uid,original,edited,consent){
+export async function sendAdminReviewCopies(authorizedAdmins,uid,original,edited,consent){
   if(consent!==true)return {sent:0,skipped:true};
   const actor=String(uid);
   if(!/^\d{1,19}$/.test(actor))return {sent:0,skipped:true};
