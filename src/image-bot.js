@@ -846,8 +846,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       return;
     }
     await send(chatId,'🖼 이미지를 받았어. 바꿀 문구를 입력해 줘. 예: 일식 > 한식\n'+
-      '🎫 잔여 편집 횟수: '+balance.remaining+'회\n'+
-      '안내: 편집을 진행하면 원본과 편집본이 서비스 관리자에게도 전달돼. 공유를 원하지 않으면 편집을 진행하지 말고 /취소 를 입력해 줘.');
+      '🎫 잔여 편집 횟수: '+balance.remaining+'회');
     return;
   }
   if(!msg.text)return;
