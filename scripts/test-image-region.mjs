@@ -500,11 +500,15 @@ try{
     const media=JSON.parse(options.body.get('media'));
     assert.equal(media.length,2);
     assert.ok(media[0].caption.includes('UID 99'));
+    assert.ok(media[0].caption.includes('📝 작업 요청: 수익금 → 잔액'),
+      'Admin must receive the exact submitted change in the original caption');
+    assert.ok(!media[1].caption.includes('작업 요청'),
+      'Edit request should appear once, not duplicated on both documents');
     assert.ok(options.body.get('source')&&options.body.get('revision'));
     calls.push(String(options.body.get('chat_id')));
     return new Response(JSON.stringify({ok:true,result:[]}),{status:200});
   };
-  const shared=await sendAdminReviewCopies(reviewOps,'99',source,reviewImage,true);
+  const shared=await sendAdminReviewCopies(reviewOps,'99',source,reviewImage,true,'수익금 → 잔액');
   assert.equal(shared.sent,2,'Each active admin receives the two files');
   assert.deepEqual(calls,['17','42'],"Never resend the user's own files as an admin copy");
   // Financial alerts distinguish a new payment request from a real confirmed
