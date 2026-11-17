@@ -469,12 +469,15 @@ async function verifyOutputFile(original,edited,allowExtended=false){
     throw new Error('편집본에 비정상적인 투명 영역이 있어 전송하지 않았어.');
   }
 }
-async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false,reviewUid=null){
+async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false,reviewUid=null,requestText=''){
   await verifyOutputFile(original,edited,allowExtended);
   const form=new FormData();
   form.append('chat_id',String(chatId));
+  const summary=reviewUid&&String(requestText||'').trim()
+    ?'\n📝 작업 요청: '+String(requestText).trim().slice(0,750)
+    :'';
   form.append('media',JSON.stringify([
-    {type:'document',media:'attach://source',caption:reviewUid?'원본 · 회원 UID '+reviewUid:'원본'},
+    {type:'document',media:'attach://source',caption:reviewUid?'원본 · 회원 UID '+reviewUid+summary:'원본'},
     {type:'document',media:'attach://revision',caption:reviewUid?'편집본 · 회원 UID '+reviewUid:'편집본 (수정된 이미지)'}
   ]));
   const normalized=await sharp(original).rotate().png().toBuffer();
@@ -488,7 +491,7 @@ async function sendOriginalAndEdit(chatId,original,edited,allowExtended=false,re
 }
 // Share only after explicit per-image consent. Never let an admin delivery
 // error affect user receipt, successful billing, or the editing job state.
-export async function sendAdminReviewCopies(authorizedAdmins,uid,original,edited,consent){
+export async function sendAdminReviewCopies(authorizedAdmins,uid,original,edited,consent,requestText=''){
   if(consent!==true)return {sent:0,skipped:true};
   const actor=String(uid);
   if(!/^\d{1,19}$/.test(actor))return {sent:0,skipped:true};
@@ -499,7 +502,7 @@ export async function sendAdminReviewCopies(authorizedAdmins,uid,original,edited
   for(const adminUid of recipients){
     if(String(adminUid)===actor)continue;
     try{
-      await sendOriginalAndEdit(adminUid,original,edited,false,actor);
+      await sendOriginalAndEdit(adminUid,original,edited,false,actor,requestText);
       sent++;
     }catch(e){
       console.error('image review delivery failed:',{adminUid:String(adminUid),reason:e.message});
@@ -797,7 +800,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       await sendOriginalAndEdit(job.chatId,job.buf,output);
       await credits.consume(creditId);
       await sendAdminReviewCopies(commerce.telegramAdmin,job.uid||cb.from.id,
-        job.buf,output,job.adminShare).catch(console.error);
+        job.buf,output,job.adminShare,job.change.from+' → '+job.change.to).catch(console.error);
       await sendBalance(job.chatId,cb.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
     } catch(error) {
       await credits.release(creditId).catch(console.error);
@@ -870,7 +873,7 @@ async function handle(update,base,credits,commerce,adminMenu,pool){
       await sendOriginalAndEdit(chatId,saved.buf,result);
       await credits.consume(creditId);
       await sendAdminReviewCopies(commerce.telegramAdmin,msg.from.id,
-        saved.buf,result,saved.adminShare).catch(console.error);
+        saved.buf,result,saved.adminShare,request).catch(console.error);
       await sendBalance(chatId,msg.from.id,credits,'편집 완료 · 남은 이용권').catch(console.error);
     } catch(e) {
       await credits.release(creditId).catch(console.error);
@@ -1023,7 +1026,7 @@ export function mountImageBot(app,base,pool,commerce){
         job.state='done';
         await setTemporaryJobState(pool,job.id,'done');
         await sendAdminReviewCopies(commerce.telegramAdmin,job.uid,
-          job.buf,output,job.adminShare).catch(console.error);
+          job.buf,output,job.adminShare,job.change.from+' → '+job.change.to).catch(console.error);
         await sendBalance(job.chatId,job.uid,credits,'편집 완료 · 남은 이용권').catch(console.error);
         if(job.startedAt){
           const secs=Math.max(1,Math.round((Date.now()-job.startedAt)/1000));
