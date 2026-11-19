@@ -41,6 +41,23 @@ async function init(){
  CREATE INDEX IF NOT EXISTS access_key_groups_chat_idx ON access_key_groups(chat_id);
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_connected BOOLEAN NOT NULL DEFAULT TRUE;
+ CREATE TABLE IF NOT EXISTS filter_bulk_jobs(
+ id BIGSERIAL PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ private_chat_id BIGINT NOT NULL,
+ source_chat_id BIGINT NOT NULL,
+ source_title TEXT NOT NULL,
+ settings JSONB NOT NULL,
+ targets JSONB NOT NULL DEFAULT '[]'::jsonb,
+ status TEXT NOT NULL DEFAULT 'checking',
+ eligible_count INTEGER NOT NULL DEFAULT 0,
+ applied_count INTEGER NOT NULL DEFAULT 0,
+ skipped_count INTEGER NOT NULL DEFAULT 0,
+ error_text TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
+ CREATE INDEX IF NOT EXISTS filter_bulk_jobs_status_idx ON filter_bulk_jobs(status,created_at);
  CREATE TABLE IF NOT EXISTS filter_dm_pending(
  user_id BIGINT PRIMARY KEY,
  chat_id BIGINT NOT NULL,
@@ -198,6 +215,15 @@ async function enforceWordFilter(msg){
  console.log('Silent word filter restriction applied',msg.chat.id,msg.from.id,msg.message_id);
 }
 const filterPrivateMenu=createFilterPrivateMenu({tg,sql,normalizeFilterWords});
+let bulkFilterWorking=false;
+async function runFilterBulkWorker(){
+ if(bulkFilterWorking)return;
+ bulkFilterWorking=true;
+ try{await filterPrivateMenu.processBulkQueue()}
+ catch(e){console.error('filter bulk job worker:',e.message)}
+ finally{bulkFilterWorking=false}
+}
+
 async function onUpdate(u){
  const msg=u.message||u.edited_message;
  if(u.callback_query){if(await filterPrivateMenu.handleCallback(u.callback_query))return}
@@ -543,5 +569,8 @@ async function ensureImageBotWebhook(){
 }
 ensureImageBotWebhook().catch(e=>console.error('image bot webhook fatal:',e));
 reconcileGroups().catch(e=>console.error('startup membership reconciliation:',e.message));
+setTimeout(()=>runFilterBulkWorker(),1500).unref();
+setInterval(()=>runFilterBulkWorker(),4000).unref();
+
 setInterval(()=>reconcileGroups().catch(e=>console.error('scheduled membership reconciliation:',e.message)),300000).unref();
 setInterval(()=>{for(const [id,v] of limits)if(v.every(t=>now()-t>600000))limits.delete(id);pool.query("DELETE FROM update_dedup WHERE created_at < NOW() - interval '7 days'").catch(console.error);pool.query('DELETE FROM admin_sessions WHERE expires_at<NOW()').catch(console.error)},3600000).unref();
