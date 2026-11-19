@@ -32,25 +32,45 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
   }
   await tg('sendMessage',payload);
  }
- async function listGroups(userId,chat,msgId,page=0){
-  const all=await sql('SELECT chat_id::text,title FROM groups WHERE is_connected=TRUE ORDER BY title LIMIT 150');
-  const checks=await Promise.all(all.map(async(g)=>{
-   const ok=await isAdmin(g.chat_id,userId);
-   return ok?g:null;
-  }));
-  const matches=checks.filter(Boolean);
-  if(!matches.length){
-   await display(null,userId,chat,msgId,'🛡 금칙어 필터 관리\n\n현재 관리자로 확인되는 연결 그룹이 없습니다. 봇이 그룹에 추가되어 있고 본인이 해당 그룹의 관리자인지 확인해 주세요.',[[btn('🔄 그룹 다시 확인','wf|list|0')]]);
-   return;
+ async function verifyCandidates(rows,userId){
+  const matches=[];
+  // Bounded Telegram requests: never fire 100+ getChatMember calls at once.
+  for(let i=0;i<rows.length;i+=6){
+   const batch=await Promise.all(rows.slice(i,i+6).map(async g=>(await isAdmin(g.chat_id,userId))?g:null));
+   matches.push(...batch.filter(Boolean));
   }
+  return matches;
+ }
+ async function showMatches(userId,chat,msgId,matches,page=0,heading='내가 관리하는 그룹'){
   const last=Math.max(0,Math.ceil(matches.length/8)-1),p=Math.min(Math.max(page,0),last);
   const buttons=matches.slice(p*8,(p+1)*8).map(g=>[btn('🛡 '+g.title.slice(0,35),'wf|group|'+g.chat_id)]);
-  const controls=[];
-  if(p>0)controls.push(btn('◀ 이전','wf|list|'+(p-1)));
-  if(p<last)controls.push(btn('다음 ▶','wf|list|'+(p+1)));
-  if(controls.length)buttons.push(controls);
-  buttons.push([btn('🔄 새로고침','wf|list|'+p)]);
-  await display(null,userId,chat,msgId,'🛡 그룹별 금칙어 필터\n\n아래에서 관리할 그룹을 선택하세요. 비밀번호나 회원가입은 필요 없습니다.\n\n관리 중인 그룹 '+matches.length+'개 · '+(p+1)+'/'+(last+1)+'페이지',buttons);
+  if(matches.length>8){
+   const nav=[];
+   if(p>0)nav.push(btn('◀ 이전','wf|list|'+(p-1)));
+   if(p<last)nav.push(btn('다음 ▶','wf|list|'+(p+1)));
+   if(nav.length)buttons.push(nav);
+  }
+  buttons.push([btn('🔎 그룹명으로 검색','wf|search')]);
+  buttons.push([btn('🔄 내 그룹 다시 확인','wf|list|0')]);
+  await display(null,userId,chat,msgId,'🛡 '+heading+'\n\n'+(matches.length?'관리자 권한 확인된 그룹 '+matches.length+'개':'최근 확인된 그룹이 없습니다.')+'\n\n목록에 내 그룹이 없다면 아래 그룹 검색을 눌러 이름 일부로 찾을 수 있습니다.\n비밀번호나 회원가입은 필요 없습니다.',buttons);
+ }
+ async function listGroups(userId,chat,msgId,page=0){
+  // Use bot-observed membership as a shortcut. A group administrator who never
+  // posted in the group can always find their group with the name search.
+  const observed=await sql(`SELECT g.chat_id::text,g.title FROM groups g
+   JOIN members m ON m.chat_id=g.chat_id AND m.user_id=$1
+   WHERE g.is_connected=TRUE ORDER BY m.last_seen DESC LIMIT 48`,[userId]);
+  const matches=await verifyCandidates(observed,userId);
+  await showMatches(userId,chat,msgId,matches,page);
+ }
+ async function searchGroups(userId,chat,term){
+  const q=String(term||'').trim().slice(0,70);
+  if(q.length<2)throw new Error('그룹 이름을 두 글자 이상 입력해 주세요.');
+  const candidates=await sql(`SELECT chat_id::text,title FROM groups
+    WHERE is_connected=TRUE AND POSITION(LOWER($1) IN LOWER(title))>0
+    ORDER BY title LIMIT 30`,[q]);
+  const matches=await verifyCandidates(candidates,userId);
+  await showMatches(userId,chat,null,matches,0,'검색 결과: '+q);
  }
  async function groupMenu(chatId,userId,chat,msgId){
   await requireAdmin(chatId,userId);
@@ -117,6 +137,10 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
   if(!input)return false;
   await clearPending(userId);
   try{
+   if(input.action==='search'){
+    await searchGroups(userId,chat,raw);
+    return true;
+   }
    await requireAdmin(input.chat_id,userId);
    if(input.action!=='add')return false;
    if(raw.startsWith('/'))throw new Error('금칙어를 줄 단위로 입력해 주세요.');
@@ -142,6 +166,11 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
   try{
    await clearPending(String(userId));
    if(act==='list'){await listGroups(userId,chat,msgId,Math.max(0,Math.min(Number(id)||0,25)));return true}
+   if(act==='search'){
+    await setPending(userId,0,'search');
+    await display(null,userId,chat,msgId,'🔎 그룹 이름 검색\n\n관리하는 그룹 이름의 일부를 이 개인 채팅에 입력해 주세요.\n그룹이 100개 이상이어도 관리자인 그룹만 검색 결과에 표시됩니다.\n\n10분 내 입력 · 취소: /cancel',[[btn('◀ 내 그룹','wf|list|0')]]);
+    return true;
+   }
    const groupId=gid(id);
    await requireAdmin(groupId,userId);
    if(act==='group'){await groupMenu(groupId,userId,chat,msgId);return true}
