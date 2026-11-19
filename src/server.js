@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mtprotoConfigured, resolveTelegramUsername, fetchGroupParticipants } from './mtproto.js';
+import { createFilterPrivateMenu } from './filter-dm.js';
 import { mountImageBot } from './image-bot.js';
 import { mountPhotoAdmin } from './photo-admin.js';
 
@@ -40,6 +41,12 @@ async function init(){
  CREATE INDEX IF NOT EXISTS access_key_groups_chat_idx ON access_key_groups(chat_id);
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_connected BOOLEAN NOT NULL DEFAULT TRUE;
+ CREATE TABLE IF NOT EXISTS filter_dm_pending(
+ user_id BIGINT PRIMARY KEY,
+ chat_id BIGINT NOT NULL,
+ action TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
  CREATE TABLE IF NOT EXISTS group_word_filters(
  chat_id BIGINT PRIMARY KEY REFERENCES groups(chat_id) ON DELETE CASCADE,
  enabled BOOLEAN NOT NULL DEFAULT FALSE,
@@ -190,9 +197,13 @@ async function enforceWordFilter(msg){
  await sql('INSERT INTO group_word_filter_events(chat_id,user_id,message_id,matched_word,until_date) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',[msg.chat.id,msg.from.id,msg.message_id,word,until]);
  console.log('Silent word filter restriction applied',msg.chat.id,msg.from.id,msg.message_id);
 }
+const filterPrivateMenu=createFilterPrivateMenu({tg,sql,normalizeFilterWords});
 async function onUpdate(u){
  const msg=u.message||u.edited_message;
- if(msg?.chat?.type==='private'&&operators.has(String(msg.from?.id))&&msg.text?.startsWith('/start')){await tg('sendMessage',{chat_id:msg.chat.id,text:'🛡 비상 그룹 관리자 봇 연결 완료. 웹 관리 페이지에서 본인의 Telegram ID로 인증하세요.\n내 ID: '+msg.from.id});return}
+ if(u.callback_query){if(await filterPrivateMenu.handleCallback(u.callback_query))return}
+ if(msg?.chat?.type==='private'){
+  if(await filterPrivateMenu.handleMessage(msg))return;
+ }
  if(msg&&['supergroup','group'].includes(msg.chat?.type)){await syncGroup(msg.chat);await remember(msg.chat,msg.from);await captureMessage(msg);try{await enforceWordFilter(msg)}catch(e){console.error('word filter:',e.message)}for(const m of msg.new_chat_members||[])await remember(msg.chat,m);if(msg.reply_to_message?.from)await remember(msg.chat,msg.reply_to_message.from);if(msg.new_chat_title)await syncGroup({...msg.chat,title:msg.new_chat_title});}
  if(u.chat_member){await syncGroup(u.chat_member.chat);await remember(u.chat_member.chat,u.chat_member.new_chat_member?.user)}
  if(u.my_chat_member){
@@ -515,7 +526,7 @@ app.get('/image-editor',(_req,res)=>{
 app.get('/health',(_req,res)=>res.json({status:'ok'}));
 app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)),'../public')));
 app.use((e,req,res,next)=>{console.error(e);res.status(400).json({error:e.message||'요청 실패'})});
-await init();await commerce.init();const me=await tg('getMe');await tg('setWebhook',{url:base+'/telegram/webhook',secret_token:process.env.WEBHOOK_SECRET,allowed_updates:['message','edited_message','chat_member','my_chat_member'],drop_pending_updates:false});app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Admin bot started @'+me.username));
+await init();await commerce.init();const me=await tg('getMe');await tg('setWebhook',{url:base+'/telegram/webhook',secret_token:process.env.WEBHOOK_SECRET,allowed_updates:['message','edited_message','chat_member','my_chat_member','callback_query'],drop_pending_updates:false});app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Admin bot started @'+me.username));
 async function ensureImageBotWebhook(){
   for(let attempt=1;;attempt++){
     try{
