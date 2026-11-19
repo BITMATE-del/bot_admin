@@ -114,6 +114,9 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
  }
  async function confirmBulk(jobId,userId,chat){
   if(!/^\d{1,19}$/.test(String(jobId)))throw new Error('잘못된 전체적용 작업 번호입니다.');
+  const source=await sql("SELECT source_chat_id::text FROM filter_bulk_jobs WHERE id=$1 AND user_id=$2 AND private_chat_id=$3 AND status='ready'",[jobId,userId,chat]);
+  if(!source.length)throw new Error('승인 가능한 전체적용 작업이 없습니다.');
+  await requireAdmin(source[0].source_chat_id,userId);
   const rows=await sql(`UPDATE filter_bulk_jobs SET status='applying',updated_at=NOW()
     WHERE id=$1 AND user_id=$2 AND private_chat_id=$3 AND status='ready'
       AND created_at>NOW()-INTERVAL '20 minutes'
