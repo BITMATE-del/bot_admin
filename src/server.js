@@ -396,6 +396,8 @@ app.post('/api/group-connections/reconcile',auth,ownerOnly,async(req,res,next)=>
  const active=await sql('SELECT COUNT(*)::int AS count FROM groups WHERE is_connected=TRUE');
  res.json({ok:true,connected_groups:active[0].count});
 }catch(e){next(e)}});
+// Enforce password-assigned group access for every group endpoint, including filtering.
+app.use('/api/groups/:id',auth,scopedGroup);
 app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info,rights:Object.fromEntries(rightKeys.map(k=>[k,!!status[k]]))})}catch(e){next(e)}});
 async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1 AND is_connected=TRUE',[id]);if(!r.length)throw new Error('연결되지 않았거나 봇이 추방된 그룹입니다')}
 
