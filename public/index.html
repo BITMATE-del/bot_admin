@@ -140,7 +140,7 @@
 <div id="accessList" class="list" style="max-height:450px"></div>
 </section>
 <div id="regularPanel"><div class="row group-head"><div><h2 id="selectedTitle" style="margin-bottom:5px">그룹 선택</h2><div id="groupMeta" class="muted">좌측에서 그룹을 선택하세요.</div></div><button id="refreshRights" class="secondary">권한 확인</button></div>
-<nav class="tabs"><button data-tab="promote" class="active">관리자 부여</button><button data-tab="admins">관리자 목록</button><button data-tab="settings">그룹 설정</button><button data-tab="members">회원 관리</button><button data-tab="emergency">긴급 조치</button><button data-tab="logs">변경 기록</button></nav>
+<nav class="tabs"><button data-tab="promote" class="active">관리자 부여</button><button data-tab="admins">관리자 목록</button><button data-tab="settings">그룹 설정</button><button data-tab="members">회원 관리</button><button data-tab="filter">금칙어 필터</button><button data-tab="emergency">긴급 조치</button><button data-tab="logs">변경 기록</button></nav>
 <section id="promote"><h3>관리자로 임명할 회원 검색</h3><p class="hint">이름, 사용자명(@username), Telegram ID로 검색할 수 있습니다. 기존 수집 회원은 이름·ID로 검색하고, @사용자명은 텔레그램에서 직접 조회할 수 있습니다.</p><label class="field">저장된 회원 검색<input id="search" placeholder="이름 · 사용자명 · Telegram ID"></label>
 <div class="formgrid">
   <label class="field">Telegram @사용자명 직접 검색<input id="usernameLookup" placeholder="@username"></label>
@@ -179,6 +179,28 @@
 <div class="row" style="justify-content:flex-start;flex-wrap:wrap"><button id="banButton" class="danger">회원 차단</button><button id="unbanButton" class="secondary">차단 해제</button></div>
 <p class="hint">관리자나 소유자는 봇 권한에 따라 제한할 수 없습니다. 대상과 그룹을 확인한 뒤 차단하세요.</p>
 </div></section>
+<section id="filter" class="hidden">
+<div class="row" style="flex-wrap:wrap;gap:12px">
+ <div><h3 style="font-size:17px;margin:0 0 6px">그룹 금칙어 자동 필터</h3><p class="hint">입력한 금칙어가 메시지에 포함되면 회원의 채팅만 제한합니다. 추방·메시지 삭제·안내 메시지 전송은 하지 않습니다.</p></div>
+ <span id="wordFilterState" class="badge">설정 불러오는 중</span>
+</div>
+<div style="background:#f7f9fd;border:1px solid #e4eaf4;border-radius:14px;padding:17px;margin:17px 0">
+<label style="display:flex;align-items:center;gap:11px;font-size:14px;font-weight:750"><input id="wordFilterEnabled" type="checkbox" style="width:19px;height:19px"> 금칙어 필터 활성화</label>
+<p class="hint">기본값은 사용 안 함입니다. 설정을 저장해야 적용돼요.</p>
+<label class="field">금칙어 목록 (한 줄에 한 단어 또는 문구)<textarea id="wordFilterWords" rows="8" maxlength="6500" placeholder="금칙어를 한 줄씩 입력하세요.&#10;등록되지 않은 단어는 차단하지 않습니다."></textarea></label>
+<div class="formgrid">
+<label class="field">채팅 정지 시간<select id="wordFilterDuration">
+<option value="3600">1시간</option><option value="43200">12시간</option><option value="86400" selected>24시간</option><option value="259200">3일</option><option value="604800">7일</option><option value="0">무기한</option>
+</select></label>
+<div style="align-self:center"><p class="hint">메시지를 삭제하거나 상대를 추방하지 않습니다. 관리자·소유자는 자동 정지 대상에서 제외됩니다.</p></div>
+</div>
+<div class="row" style="justify-content:flex-start;flex-wrap:wrap"><button id="wordFilterSave" class="primary">필터 설정 저장</button><button id="wordFilterRefresh" class="secondary">설정 새로고침</button></div>
+<div id="wordFilterFeedback" class="status hidden" role="status" aria-live="polite"></div>
+<p class="hint">단어의 일부가 다른 정상 표현에 포함돼도 감지될 수 있으니 짧고 모호한 금칙어는 피해주세요. 필터 적용 전에 그룹의 봇에 ‘회원 차단·제한’ 권한이 필요합니다.</p>
+</div>
+<div class="row" style="margin:18px 0"><h3 style="margin:0">자동 채팅정지 기록</h3><button id="wordFilterEventsReload" class="secondary">기록 새로고침</button></div>
+<div id="wordFilterEvents" class="list"><div class="empty">현재 그룹의 처리 내역을 불러옵니다.</div></div>
+</section>
 <section id="emergency" class="hidden"><h3>그룹 긴급 조치</h3><p class="hint">소유자 계정에 문제가 생겼을 때 봇의 기존 관리자 권한으로 가능한 작업만 수행합니다.</p><div class="row" style="justify-content:flex-start"><button id="lock" class="danger">일반 회원 채팅 잠금</button><button id="unlock" class="secondary">채팅 잠금 해제</button></div><label class="field">메시지 ID<input id="messageId" inputmode="numeric" placeholder="메시지 숫자 ID"></label><div class="row" style="justify-content:flex-start"><button id="pin" class="secondary">공지 고정</button><button id="deleteMessage" class="danger">메시지 삭제</button></div><p class="hint">메시지 ID는 Telegram의 메시지 링크 등에서 확인할 수 있습니다.</p><button id="invite" class="secondary">새 초대 링크 발급</button><label class="field">생성된 초대 링크<input id="inviteResult" readonly placeholder="발급 후 표시됩니다"></label></section><section id="logs" class="hidden"><h3>최근 변경 기록</h3><div id="logsList"></div></section>
 <div id="status" class="status hidden" role="status"></div></div></main></div></div>
 <script>
@@ -487,7 +509,7 @@ async function loadGroups(){
  groups=await api('/api/groups');
  if(group&&!groups.some(g=>g.chat_id===group.chat_id)){
   group=null;$('selectedTitle').textContent='그룹 선택';$('groupMeta').textContent='연결된 그룹을 선택하세요.';
-  for(const tab of ['promote','admins','settings','members','emergency','logs'])$(tab).classList.add('hidden');
+  for(const tab of ['promote','admins','settings','members','filter','emergency','logs'])$(tab).classList.add('hidden');
   status('연결이 해제된 그룹은 목록에서 제외됐습니다.');
  }
  renderGroupList();
@@ -533,8 +555,50 @@ async function searchManageMembers(){
   if(!rows.length)list.innerHTML='<div class="empty">검색 결과가 없습니다. @사용자명 직접 검색을 이용해 보세요.</div>';
  }catch(e){list.textContent='회원 검색 실패: '+e.message}
 }
-async function switchTab(tab){activeTab=tab;document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));for(const t of ['promote','admins','settings','members','emergency','logs'])$(t).classList.toggle('hidden',t!==tab);if(!group)return;if(tab==='promote')await members();if(tab==='members'){await loadRecentChats();await searchManageMembers()}if(tab==='admins'){const a=await api(groupPath('/admins'));$('adminsList').innerHTML=a.map(x=>'<div class="member"><div class="avatar">★</div><div><div class="item-title">'+escapeHtml(x.first_name)+'</div><div class="item-sub">@'+escapeHtml(x.username||'없음')+' · ID '+escapeHtml(x.user_id)+' · '+escapeHtml(x.status)+'</div></div></div>').join('')||'<div class="empty">관리자 정보 없음</div>'}if(tab==='logs'){const a=await api(groupPath('/audit'));$('logsList').innerHTML=a.map(x=>'<div class="log"><b>'+escapeHtml(x.action)+'</b> · '+escapeHtml(x.target_id||'-')+'<div class="muted">'+escapeHtml(x.created_at)+' · 운영자 '+escapeHtml(x.operator_id)+'</div></div>').join('')||'<div class="empty">아직 기록이 없습니다.</div>'}}
+async function switchTab(tab){activeTab=tab;document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));for(const t of ['promote','admins','settings','members','filter','emergency','logs'])$(t).classList.toggle('hidden',t!==tab);if(!group)return;if(tab==='promote')await members();if(tab==='members'){await loadRecentChats();await searchManageMembers()}if(tab==='filter'){await loadWordFilter();await loadWordFilterEvents()}if(tab==='admins'){const a=await api(groupPath('/admins'));$('adminsList').innerHTML=a.map(x=>'<div class="member"><div class="avatar">★</div><div><div class="item-title">'+escapeHtml(x.first_name)+'</div><div class="item-sub">@'+escapeHtml(x.username||'없음')+' · ID '+escapeHtml(x.user_id)+' · '+escapeHtml(x.status)+'</div></div></div>').join('')||'<div class="empty">관리자 정보 없음</div>'}if(tab==='logs'){const a=await api(groupPath('/audit'));$('logsList').innerHTML=a.map(x=>'<div class="log"><b>'+escapeHtml(x.action)+'</b> · '+escapeHtml(x.target_id||'-')+'<div class="muted">'+escapeHtml(x.created_at)+' · 운영자 '+escapeHtml(x.operator_id)+'</div></div>').join('')||'<div class="empty">아직 기록이 없습니다.</div>'}}
 async function run(f){try{await f()}catch(e){status(e.message)}}
+
+async function loadWordFilter(){
+ if(!group)return;
+ const data=await api(groupPath('/word-filter'));
+ $('wordFilterEnabled').checked=!!data.enabled;
+ $('wordFilterWords').value=Array.isArray(data.words)?data.words.join('\n'):'';
+ $('wordFilterDuration').value=String(data.mute_seconds??86400);
+ $('wordFilterState').textContent=data.enabled?'작동 중':'사용 안 함';
+ $('wordFilterState').style.color=data.enabled?'#23825f':'#58647a';
+ $('wordFilterFeedback').classList.add('hidden');
+}
+async function loadWordFilterEvents(){
+ if(!group)return;
+ const items=await api(groupPath('/word-filter-events'));
+ const box=$('wordFilterEvents');box.replaceChildren();
+ for(const a of items){
+  const row=document.createElement('div');row.className='member';row.style.display='block';
+  const d=new Date(a.created_at).toLocaleString('ko-KR');
+  const until=Number(a.until_date)===0?'무기한':new Date(Number(a.until_date)*1000).toLocaleString('ko-KR')+'까지';
+  row.innerHTML='<div class="row"><strong>회원 ID '+escapeHtml(a.user_id)+'</strong><span class="muted">'+escapeHtml(d)+'</span></div>'+
+  '<div class="item-sub">감지: '+escapeHtml(a.matched_word)+' · 채팅 제한 '+escapeHtml(until)+'</div>';
+  box.append(row);
+ }
+ if(!items.length)box.innerHTML='<div class="empty">아직 자동 채팅정지 기록이 없습니다.</div>';
+}
+$('wordFilterSave').onclick=async()=>{
+ if(!group)return status('그룹을 선택하세요');
+ const words=$('wordFilterWords').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ const body={enabled:$('wordFilterEnabled').checked,words,mute_seconds:Number($('wordFilterDuration').value)};
+ const button=$('wordFilterSave');button.disabled=true;button.textContent='저장 중...';
+ try{
+  const result=await api(groupPath('/word-filter'),{method:'PUT',body:JSON.stringify(body)});
+  $('wordFilterFeedback').classList.remove('hidden');
+  $('wordFilterFeedback').textContent=result.enabled?'필터가 활성화됐습니다. 등록된 금칙어 '+result.count+'개에 대해서만 자동 채팅정지가 적용됩니다.':'설정이 저장됐습니다. 현재 자동 필터는 꺼져 있습니다.';
+  $('wordFilterState').textContent=result.enabled?'작동 중':'사용 안 함';
+  $('wordFilterState').style.color=result.enabled?'#23825f':'#58647a';
+ }catch(e){
+  $('wordFilterFeedback').classList.remove('hidden');$('wordFilterFeedback').textContent='저장 실패: '+e.message;
+ }finally{button.disabled=false;button.textContent='필터 설정 저장'}
+};
+$('wordFilterRefresh').onclick=()=>run(loadWordFilter);
+$('wordFilterEventsReload').onclick=()=>run(loadWordFilterEvents);
 $('loginButton').onclick=()=>run(async()=>{await post('/api/auth/login',{password:$('password').value});switchAuth(true);await loadIdentity();await loadGroups();await mtprotoStatus()});
 $('password').addEventListener('keydown',ev=>{if(ev.key==='Enter')$('loginButton').click()});
 $('logout').onclick=()=>run(async()=>{await post('/api/auth/logout');switchAuth(false)});
