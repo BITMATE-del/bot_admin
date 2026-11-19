@@ -40,6 +40,24 @@ async function init(){
  CREATE INDEX IF NOT EXISTS access_key_groups_chat_idx ON access_key_groups(chat_id);
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS username TEXT;
  ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_connected BOOLEAN NOT NULL DEFAULT TRUE;
+ CREATE TABLE IF NOT EXISTS group_word_filters(
+ chat_id BIGINT PRIMARY KEY REFERENCES groups(chat_id) ON DELETE CASCADE,
+ enabled BOOLEAN NOT NULL DEFAULT FALSE,
+ words JSONB NOT NULL DEFAULT '[]'::jsonb,
+ mute_seconds INTEGER NOT NULL DEFAULT 86400,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
+ CREATE TABLE IF NOT EXISTS group_word_filter_events(
+ id BIGSERIAL PRIMARY KEY,
+ chat_id BIGINT NOT NULL,
+ user_id BIGINT NOT NULL,
+ message_id BIGINT NOT NULL,
+ matched_word TEXT NOT NULL,
+ until_date BIGINT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ UNIQUE(chat_id,message_id,user_id)
+ );
+ CREATE INDEX IF NOT EXISTS word_filter_events_chat_idx ON group_word_filter_events(chat_id,created_at DESC);
  CREATE TABLE IF NOT EXISTS recent_messages(chat_id BIGINT NOT NULL,message_id BIGINT NOT NULL,user_id BIGINT NOT NULL,first_name TEXT NOT NULL DEFAULT '',last_name TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',preview TEXT NOT NULL DEFAULT '',sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(chat_id,message_id));
  CREATE INDEX IF NOT EXISTS recent_messages_by_group ON recent_messages(chat_id,sent_at DESC,message_id DESC);
  CREATE TABLE IF NOT EXISTS work_plans(
@@ -124,10 +142,58 @@ async function reconcileGroups(){
   catch(e){console.warn('group membership check failed:',g.chat_id,e.message)}
  }
 }
+
+const wordFilterDurations=new Set([3600,43200,86400,259200,604800,0]);
+const silentMutePermissions={
+ can_send_messages:false,
+ can_send_audios:false,
+ can_send_documents:false,
+ can_send_photos:false,
+ can_send_videos:false,
+ can_send_video_notes:false,
+ can_send_voice_notes:false,
+ can_send_polls:false,
+ can_send_other_messages:false,
+ can_add_web_page_previews:false
+};
+const normalizeFilteredText=value=>String(value||'').normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/\s+/g,' ').trim();
+const normalizeFilterWords=value=>{
+ if(!Array.isArray(value))throw new Error('금칙어 목록을 확인해 주세요');
+ const words=[...new Set(value.map(x=>String(x||'').normalize('NFKC').trim()).filter(Boolean))];
+ if(words.length>100)throw new Error('금칙어는 그룹당 최대 100개까지 등록할 수 있습니다');
+ for(const word of words)if(word.length<2||word.length>60||/[\r\n]/.test(word))throw new Error('금칙어는 2~60자 길이로 한 줄에 하나씩 입력하세요');
+ return words;
+};
+// No sendMessage, banChatMember, deleteMessage, or group notification in this workflow.
+async function enforceWordFilter(msg){
+ if(!msg?.from?.id||msg.from.is_bot||msg.sender_chat||msg.chat?.type!=='supergroup')return;
+ const text=msg.text||msg.caption;
+ if(!text)return;
+ const settings=await sql('SELECT enabled,words,mute_seconds FROM group_word_filters WHERE chat_id=$1',[msg.chat.id]);
+ const config=settings[0];
+ if(!config?.enabled||!Array.isArray(config.words)||!config.words.length)return;
+ const content=normalizeFilteredText(text);
+ const word=config.words.find(x=>content.includes(normalizeFilteredText(x)));
+ if(!word)return;
+ // Prevent double-action on repeated/edited Telegram updates of the same message.
+ const existing=await sql('SELECT 1 FROM group_word_filter_events WHERE chat_id=$1 AND message_id=$2 AND user_id=$3',[msg.chat.id,msg.message_id,msg.from.id]);
+ if(existing.length)return;
+ const current=await tg('getChatMember',{chat_id:msg.chat.id,user_id:msg.from.id});
+ if(current.status==='administrator'||current.status==='creator'||current.status==='left'||current.status==='kicked')return;
+ if(current.status==='restricted'&&current.can_send_messages===false)return;
+ const me=await tg('getMe');
+ const bot=await tg('getChatMember',{chat_id:msg.chat.id,user_id:me.id});
+ if(bot.status!=='administrator'||!bot.can_restrict_members)throw new Error('필터 자동 정지 실패: 봇의 회원 제한 권한이 없습니다');
+ const duration=Number(config.mute_seconds);
+ const until=duration===0?0:Math.floor(Date.now()/1000)+duration;
+ await tg('restrictChatMember',{chat_id:msg.chat.id,user_id:msg.from.id,permissions:silentMutePermissions,use_independent_chat_permissions:true,until_date:until});
+ await sql('INSERT INTO group_word_filter_events(chat_id,user_id,message_id,matched_word,until_date) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',[msg.chat.id,msg.from.id,msg.message_id,word,until]);
+ console.log('Silent word filter restriction applied',msg.chat.id,msg.from.id,msg.message_id);
+}
 async function onUpdate(u){
  const msg=u.message||u.edited_message;
  if(msg?.chat?.type==='private'&&operators.has(String(msg.from?.id))&&msg.text?.startsWith('/start')){await tg('sendMessage',{chat_id:msg.chat.id,text:'🛡 비상 그룹 관리자 봇 연결 완료. 웹 관리 페이지에서 본인의 Telegram ID로 인증하세요.\n내 ID: '+msg.from.id});return}
- if(msg&&['supergroup','group'].includes(msg.chat?.type)){await syncGroup(msg.chat);await remember(msg.chat,msg.from);await captureMessage(msg);for(const m of msg.new_chat_members||[])await remember(msg.chat,m);if(msg.reply_to_message?.from)await remember(msg.chat,msg.reply_to_message.from);if(msg.new_chat_title)await syncGroup({...msg.chat,title:msg.new_chat_title});}
+ if(msg&&['supergroup','group'].includes(msg.chat?.type)){await syncGroup(msg.chat);await remember(msg.chat,msg.from);await captureMessage(msg);try{await enforceWordFilter(msg)}catch(e){console.error('word filter:',e.message)}for(const m of msg.new_chat_members||[])await remember(msg.chat,m);if(msg.reply_to_message?.from)await remember(msg.chat,msg.reply_to_message.from);if(msg.new_chat_title)await syncGroup({...msg.chat,title:msg.new_chat_title});}
  if(u.chat_member){await syncGroup(u.chat_member.chat);await remember(u.chat_member.chat,u.chat_member.new_chat_member?.user)}
  if(u.my_chat_member){
   const event=u.my_chat_member;
@@ -332,6 +398,39 @@ app.post('/api/group-connections/reconcile',auth,ownerOnly,async(req,res,next)=>
 }catch(e){next(e)}});
 app.post('/api/groups/:id/refresh',auth,async(req,res,next)=>{try{const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);const status=await refreshGroup(id);res.json({ok:true,status:status.status,can_promote_members:!!status.can_promote_members,can_change_info:!!status.can_change_info,rights:Object.fromEntries(rightKeys.map(k=>[k,!!status[k]]))})}catch(e){next(e)}});
 async function assertGroup(id){const r=await sql('SELECT chat_id FROM groups WHERE chat_id=$1 AND is_connected=TRUE',[id]);if(!r.length)throw new Error('연결되지 않았거나 봇이 추방된 그룹입니다')}
+
+app.get('/api/groups/:id/word-filter',auth,async(req,res,next)=>{try{
+ const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);
+ const rows=await sql('SELECT enabled,words,mute_seconds,updated_at FROM group_word_filters WHERE chat_id=$1',[id]);
+ res.setHeader('Cache-Control','no-store');
+ res.json(rows[0]||{enabled:false,words:[],mute_seconds:86400});
+}catch(e){next(e)}});
+app.put('/api/groups/:id/word-filter',auth,async(req,res,next)=>{try{
+ const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);
+ if(typeof req.body.enabled!=='boolean')throw new Error('필터 사용 여부를 선택해 주세요');
+ const words=normalizeFilterWords(req.body.words);
+ const duration=Number(req.body.mute_seconds);
+ if(!wordFilterDurations.has(duration))throw new Error('지원하는 채팅 정지 시간을 선택해 주세요');
+ if(req.body.enabled){
+  if(!words.length)throw new Error('필터를 켜려면 금칙어를 하나 이상 등록하세요');
+  const me=await tg('getMe');
+  const bot=await tg('getChatMember',{chat_id:id,user_id:me.id});
+  if(bot.status!=='administrator'||!bot.can_restrict_members)return res.status(403).json({error:'봇에 회원 차단·제한 관리자 권한이 없습니다. 그룹 관리자 설정을 확인하세요.'});
+  const chat=await tg('getChat',{chat_id:id});
+  if(chat.type!=='supergroup')return res.status(400).json({error:'자동 채팅 정지는 텔레그램 슈퍼그룹에서만 지원합니다'});
+ }
+ await sql(`INSERT INTO group_word_filters(chat_id,enabled,words,mute_seconds,updated_at)
+ VALUES($1,$2,$3::jsonb,$4,NOW()) ON CONFLICT(chat_id)
+ DO UPDATE SET enabled=EXCLUDED.enabled,words=EXCLUDED.words,mute_seconds=EXCLUDED.mute_seconds,updated_at=NOW()`,
+ [id,req.body.enabled,JSON.stringify(words),duration]);
+ res.json({ok:true,enabled:req.body.enabled,count:words.length,mute_seconds:duration});
+}catch(e){next(e)}});
+app.get('/api/groups/:id/word-filter-events',auth,async(req,res,next)=>{try{
+ const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);
+ const rows=await sql(`SELECT user_id::text,message_id::text,matched_word,until_date::text,created_at
+ FROM group_word_filter_events WHERE chat_id=$1 ORDER BY id DESC LIMIT 30`,[id]);
+ res.setHeader('Cache-Control','no-store');res.json(rows);
+}catch(e){next(e)}});
 app.get('/api/groups/:id/recent-messages',auth,async(req,res,next)=>{try{
  const id=safeId(req.params.id);if(!id)return res.sendStatus(400);await assertGroup(id);
  const data=await sql(`SELECT message_id::text,user_id::text,first_name,last_name,username,preview,sent_at FROM recent_messages WHERE chat_id=$1 ORDER BY sent_at DESC,message_id DESC LIMIT 50`,[id]);
