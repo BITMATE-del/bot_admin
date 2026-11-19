@@ -83,9 +83,148 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
    [btn('➕ 금칙어 추가','wf|add|'+chatId),btn('➖ 금칙어 삭제','wf|del|'+chatId+'|0')],
    [btn('⏱ 정지 시간','wf|time|'+chatId)],
    [btn(cfg.enabled?'⏸ 필터 끄기':'✅ 필터 켜기','wf|toggle|'+chatId)],
+   [btn('📋 이 설정을 내 모든 그룹에 적용','wf|bulk|'+chatId)],
    [btn('◀ 내 그룹 목록','wf|list|0')]
   ];
   await display(chatId,userId,chat,msgId,message,keyboard);
+ }
+
+ // Bulk changes use a two-step private-chat preview/confirmation workflow.
+ // Only groups for which the Telegram user is currently administrator qualify.
+ async function beginBulkPreview(sourceId,userId,chat,msgId){
+  await requireAdmin(sourceId,userId);
+  const cfg=await setting(sourceId);
+  const words=normalizeFilterWords(Array.isArray(cfg.words)?cfg.words:[]);
+  if(!words.length)throw new Error('기준 그룹에 금칙어를 먼저 등록해 주세요.');
+  const [g]=await sql('SELECT title FROM groups WHERE chat_id=$1',[sourceId]);
+  const active=await sql(`SELECT id::text FROM filter_bulk_jobs WHERE user_id=$1
+    AND status IN ('checking','ready','applying') AND created_at>NOW()-INTERVAL '60 minutes'
+    ORDER BY id DESC LIMIT 1`,[userId]);
+  if(active.length)throw new Error('진행 중인 전체적용 작업이 있습니다. 작업이 끝난 뒤 다시 시도해 주세요.');
+  const snapshot={enabled:!!cfg.enabled,words,mute_seconds:Number(cfg.mute_seconds)};
+  const rows=await sql(`INSERT INTO filter_bulk_jobs(user_id,private_chat_id,source_chat_id,source_title,settings,status)
+    VALUES($1,$2,$3,$4,$5::jsonb,'checking') RETURNING id::text`,
+    [userId,chat,sourceId,String(g?.title||'선택 그룹').slice(0,140),JSON.stringify(snapshot)]);
+  await display(sourceId,userId,chat,msgId,
+   '📋 전체적용 대상 확인 중\n\n기준 그룹: '+String(g?.title||sourceId)+'\n금칙어 '+words.length+'개 · 정지 시간 '+(durationLabels.get(snapshot.mute_seconds)||'24시간')+
+   '\n상태: '+(snapshot.enabled?'활성화':'비활성화')+
+   '\n\n연결된 그룹 중 본인이 실제 관리자인 방만 확인합니다. 확인이 끝나면 정확한 적용 건수와 최종 확인 버튼을 개인 채팅으로 보내드립니다.\n\n그룹 채팅에는 아무 메시지도 보내지 않습니다.',
+   [[btn('◀ 설정으로 돌아가기','wf|group|'+sourceId)]]);
+  return rows[0].id;
+ }
+ async function confirmBulk(jobId,userId,chat){
+  if(!/^\d{1,19}$/.test(String(jobId)))throw new Error('잘못된 전체적용 작업 번호입니다.');
+  const rows=await sql(`UPDATE filter_bulk_jobs SET status='applying',updated_at=NOW()
+    WHERE id=$1 AND user_id=$2 AND private_chat_id=$3 AND status='ready'
+      AND created_at>NOW()-INTERVAL '20 minutes'
+    RETURNING id::text,source_chat_id::text,eligible_count`,[jobId,userId,chat]);
+  if(!rows.length)throw new Error('적용 대기 중인 작업이 없거나 확인 시간이 만료됐습니다.');
+  await tg('sendMessage',{chat_id:chat,text:'✅ 전체적용 요청을 접수했습니다. '+rows[0].eligible_count+'개 그룹을 대상으로 관리자 권한을 다시 확인하며 적용합니다. 완료 결과는 이 개인 채팅으로 알려드립니다.'});
+ }
+ async function cancelBulk(jobId,userId,chat){
+  if(!/^\d{1,19}$/.test(String(jobId)))throw new Error('잘못된 작업 번호입니다.');
+  await sql(`UPDATE filter_bulk_jobs SET status='cancelled',updated_at=NOW()
+    WHERE id=$1 AND user_id=$2 AND private_chat_id=$3 AND status IN ('checking','ready')`,
+    [jobId,userId,chat]);
+  await tg('sendMessage',{chat_id:chat,text:'전체적용을 취소했습니다. 다른 그룹의 설정은 변경되지 않았습니다.'});
+ }
+ async function claimBulkJob(){
+  const rows=await sql(`UPDATE filter_bulk_jobs SET
+    status=CASE WHEN status='checking' THEN 'checking_running' ELSE 'applying_running' END,
+    updated_at=NOW()
+    WHERE id=(
+      SELECT id FROM filter_bulk_jobs WHERE
+       status IN ('checking','applying')
+       OR (status IN ('checking_running','applying_running') AND updated_at<NOW()-INTERVAL '3 minutes')
+      ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id::text,user_id::text,private_chat_id::text,source_chat_id::text,
+      source_title,settings,targets,status,eligible_count,applied_count,skipped_count`);
+  return rows[0]||null;
+ }
+ async function checkBulkJob(job){
+  const all=await sql('SELECT chat_id::text,title FROM groups WHERE is_connected=TRUE ORDER BY title LIMIT 2000');
+  const allowed=[];
+  // Limit concurrent Telegram checks to reduce 429s and never trust DB membership
+  // as an authority for modifying another group's configuration.
+  for(let i=0;i<all.length;i+=4){
+   const states=await Promise.all(all.slice(i,i+4).map(async g=>{
+    try{return await isAdmin(g.chat_id,job.user_id)?g:null}catch{return null}
+   }));
+   allowed.push(...states.filter(Boolean));
+   await sql("UPDATE filter_bulk_jobs SET updated_at=NOW() WHERE id=$1 AND status='checking_running'",[job.id]);
+  }
+  const current=await sql("SELECT status FROM filter_bulk_jobs WHERE id=$1",[job.id]);
+  if(current[0]?.status!=='checking_running')return;
+  if(!allowed.length){
+   await sql("UPDATE filter_bulk_jobs SET status='failed',error_text='관리자로 확인된 그룹이 없습니다',updated_at=NOW() WHERE id=$1 AND status='checking_running'",[job.id]);
+   await tg('sendMessage',{chat_id:job.private_chat_id,text:'전체적용 대상 확인 결과: 관리자로 확인되는 그룹이 없습니다. 설정은 변경되지 않았습니다.'});
+   return;
+  }
+  await sql(`UPDATE filter_bulk_jobs SET status='ready',targets=$2::jsonb,eligible_count=$3,updated_at=NOW()
+    WHERE id=$1 AND status='checking_running'`,[job.id,JSON.stringify(allowed),allowed.length]);
+  const cfg=job.settings;
+  const titles=allowed.slice(0,12).map(g=>'• '+g.title.slice(0,55)).join('\n');
+  await tg('sendMessage',{chat_id:job.private_chat_id,
+   text:'📋 금칙어 전체적용 최종 확인\n\n기준 그룹: '+job.source_title+
+    '\n금칙어: '+cfg.words.length+'개\n정지 시간: '+(durationLabels.get(cfg.mute_seconds)||cfg.mute_seconds+'초')+
+    '\n적용 상태: '+(cfg.enabled?'✅ 켜짐':'⏸ 꺼짐')+
+    '\n\n본인이 관리자로 확인된 그룹: '+allowed.length+'개\n'+titles+
+    (allowed.length>12?'\n…외 '+(allowed.length-12)+'개':'')+
+    '\n\n⚠️ 확인하면 해당 그룹들의 기존 금칙어 목록·정지 시간·켜짐/꺼짐 상태가 모두 교체됩니다.\n권한이 변경되었거나 봇 제한 권한이 없는 그룹은 자동으로 건너뜁니다.\n20분 안에 확인해 주세요.',
+   reply_markup:menu([[btn('✅ '+allowed.length+'개 그룹 전체적용','wf|bulkconfirm|'+job.id)],
+                       [btn('❌ 취소','wf|bulkcancel|'+job.id)]])});
+ }
+ async function applyBulkJob(job){
+  const cfg=job.settings,targets=Array.isArray(job.targets)?job.targets:[];
+  if(!cfg||!Array.isArray(cfg.words)||!targets.length)throw new Error('전체적용 대상과 설정값이 올바르지 않습니다.');
+  const words=normalizeFilterWords(cfg.words);
+  if(!words.length||!durationLabels.has(Number(cfg.mute_seconds)))throw new Error('전체적용 설정값이 유효하지 않습니다.');
+  const me=cfg.enabled?await tg('getMe'):null;
+  let applied=Number(job.applied_count||0),skipped=Number(job.skipped_count||0);
+  for(let i=applied+skipped;i<targets.length;i++){
+   const target=targets[i];
+   const current=await sql('SELECT status FROM filter_bulk_jobs WHERE id=$1',[job.id]);
+   if(current[0]?.status!=='applying_running')return;
+   let permitted=false;
+   try{
+    if(await isAdmin(target.chat_id,job.user_id)){
+     if(cfg.enabled){
+      const bot=await tg('getChatMember',{chat_id:target.chat_id,user_id:me.id});
+      const details=await tg('getChat',{chat_id:target.chat_id});
+      permitted=bot.status==='administrator'&&!!bot.can_restrict_members&&details.type==='supergroup';
+     }else permitted=true;
+    }
+    if(permitted){
+     await sql(`INSERT INTO group_word_filters(chat_id,enabled,words,mute_seconds,updated_at)
+      VALUES($1,$2,$3::jsonb,$4,NOW())
+      ON CONFLICT(chat_id) DO UPDATE SET
+       enabled=EXCLUDED.enabled,words=EXCLUDED.words,mute_seconds=EXCLUDED.mute_seconds,updated_at=NOW()`,
+      [target.chat_id,!!cfg.enabled,JSON.stringify(words),cfg.mute_seconds]);
+     applied++;
+    }else skipped++;
+   }catch(e){skipped++;console.warn('bulk word filter skipped group',target.chat_id,e.message)}
+   await sql(`UPDATE filter_bulk_jobs SET applied_count=$2,skipped_count=$3,updated_at=NOW()
+    WHERE id=$1 AND status='applying_running'`,[job.id,applied,skipped]);
+  }
+  await sql("UPDATE filter_bulk_jobs SET status='done',updated_at=NOW() WHERE id=$1 AND status='applying_running'",[job.id]);
+  await tg('sendMessage',{chat_id:job.private_chat_id,text:
+   '✅ 금칙어 전체적용 완료\n\n기준 그룹: '+job.source_title+
+   '\n정상 적용: '+applied+'개 그룹\n건너뜀: '+skipped+'개 그룹'+
+   '\n\n금칙어 '+words.length+'개 · '+(durationLabels.get(cfg.mute_seconds)||'')+' · '+(cfg.enabled?'필터 켜짐':'필터 꺼짐')+
+   '\n\n추방·메시지 삭제·Mute 안내 메시지는 발생하지 않습니다.\n/start 에서 개별 그룹 설정을 확인할 수 있습니다.'});
+ }
+ async function processBulkQueue(){
+  const job=await claimBulkJob();
+  if(!job)return;
+  try{
+   if(job.status==='checking_running')await checkBulkJob(job);
+   else if(job.status==='applying_running')await applyBulkJob(job);
+  }catch(e){
+   console.error('bulk keyword job failed',job.id,e);
+   await sql("UPDATE filter_bulk_jobs SET status='failed',error_text=$2,updated_at=NOW() WHERE id=$1",[job.id,String(e.message||e).slice(0,300)]);
+   await tg('sendMessage',{chat_id:job.private_chat_id,text:'전체적용을 끝내지 못했습니다: '+String(e.message||e).slice(0,160)+'\n적용된 건은 유지됩니다. 개별 설정을 확인해 주세요.'}).catch(()=>{});
+  }
  }
  async function deleteList(chatId,userId,chat,msgId,page=0){
   await requireAdmin(chatId,userId);
@@ -166,6 +305,8 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
   try{
    await clearPending(String(userId));
    if(act==='list'){await listGroups(userId,chat,msgId,Math.max(0,Math.min(Number(id)||0,25)));return true}
+   if(act==='bulkconfirm'){await confirmBulk(id,userId,chat);return true}
+   if(act==='bulkcancel'){await cancelBulk(id,userId,chat);return true}
    if(act==='search'){
     await setPending(userId,0,'search');
     await display(null,userId,chat,msgId,'🔎 그룹 이름 검색\n\n관리하는 그룹 이름의 일부를 이 개인 채팅에 입력해 주세요.\n그룹이 100개 이상이어도 관리자인 그룹만 검색 결과에 표시됩니다.\n\n10분 내 입력 · 취소: /cancel',[[btn('◀ 내 그룹','wf|list|0')]]);
@@ -174,6 +315,7 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
    const groupId=gid(id);
    await requireAdmin(groupId,userId);
    if(act==='group'){await groupMenu(groupId,userId,chat,msgId);return true}
+   if(act==='bulk'){await beginBulkPreview(groupId,userId,chat,msgId);return true}
    if(act==='add'){
     await setPending(userId,groupId,'add');
     await display(groupId,userId,chat,msgId,'➕ 추가할 금칙어를 이 개인 채팅에 입력해 주세요.\n\n여러 개를 한 번에 추가하려면 한 줄에 하나씩 입력하세요.\n\n10분 안에 입력해 주세요. 취소: /cancel',[[btn('◀ 취소','wf|group|'+groupId)]]);
@@ -218,5 +360,5 @@ export function createFilterPrivateMenu({tg,sql,normalizeFilterWords}){
   }
   return true;
  }
- return {handleMessage,handleCallback};
+ return {handleMessage,handleCallback,processBulkQueue};
 }
