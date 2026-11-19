@@ -34,13 +34,49 @@ const isFont=bytes=>{
  const sig=bytes.subarray(0,4).toString('ascii');
  return sig==='OTTO'||sig==='ttcf'||sig==='true'||bytes.readUInt32BE(0)===0x00010000;
 };
+
+const fallbackFonts={
+ nanummyeongjo:['NanumMyeongjo-Regular.ttf','NanumMyeongjo-Bold.ttf','NanumMyeongjo-ExtraBold.ttf'],
+ gowunbatang:['GowunBatang-Regular.ttf','GowunBatang-Bold.ttf'],
+ songmyung:['SongMyung-Regular.ttf'],
+ hahmlet:['Hahmlet[wght].ttf'],
+ notoserifkr:['NotoSerifKR[wght].ttf'],
+ nanumgothic:['NanumGothic-Regular.ttf','NanumGothic-Bold.ttf','NanumGothic-ExtraBold.ttf'],
+ gothica1:['GothicA1-Regular.ttf','GothicA1-Bold.ttf'],
+ gowundodum:['GowunDodum-Regular.ttf'],
+ ibmplexsanskr:['IBMPlexSansKR-Regular.ttf','IBMPlexSansKR-Bold.ttf'],
+ blackhansans:['BlackHanSans-Regular.ttf'],
+ dohyeon:['DoHyeon-Regular.ttf'],
+ jua:['Jua-Regular.ttf'],
+ nanumbrushscript:['NanumBrushScript-Regular.ttf'],
+ nanumpenscript:['NanumPenScript-Regular.ttf'],
+ gaegu:['Gaegu-Regular.ttf','Gaegu-Bold.ttf','Gaegu-Light.ttf'],
+ gamjaflower:['GamjaFlower-Regular.ttf'],
+ poorstory:['PoorStory-Regular.ttf'],
+ gugi:['Gugi-Regular.ttf'],
+ yeonsung:['YeonSung-Regular.ttf'],
+ stylish:['Stylish-Regular.ttf'],
+ sunflower:['Sunflower-Medium.ttf','Sunflower-Light.ttf','Sunflower-Bold.ttf'],
+ himelody:['HiMelody-Regular.ttf'],
+ cutefont:['CuteFont-Regular.ttf'],
+ eastseadokdo:['EastSeaDokdo-Regular.ttf'],
+ dokdo:['Dokdo-Regular.ttf'],
+ kiranghaerang:['KirangHaerang-Regular.ttf']
+};
+function offlineDirectory(slug){
+ const base='https://raw.githubusercontent.com/google/fonts/main/ofl/'+slug+'/';
+ return [{name:'OFL.txt',download_url:base+'OFL.txt'},...(fallbackFonts[slug]||[]).map(name=>({name,download_url:base+name,size:0}))];
+}
+
 await mkdir(output,{recursive:true});
 const results=[];
 for(const [slug0,family,category] of families){
  const slug=slug0.toLowerCase();
  try {
   const api='https://api.github.com/repos/google/fonts/contents/ofl/'+slug;
-  const entries=await (await get(api)).json();
+  let entries;
+  try{entries=await (await get(api)).json()}
+  catch(err){console.warn('FONT_DIRECTORY_FALLBACK',family,String(err.message).slice(0,100));entries=offlineDirectory(slug)}
   if(!Array.isArray(entries))throw Error('directory not found');
   const license=entries.find(f=>f.name==='OFL.txt');
   if(!license)throw Error('OFL license missing');
